@@ -2,6 +2,7 @@ import os, sys, time, io, math
 import fitz
 import numpy as np
 from PIL import Image
+
 Image.MAX_IMAGE_PIXELS = None
 from collections import defaultdict
 
@@ -296,23 +297,36 @@ def analyze_pdf(path, grand, log, check_color=True):
 
 def print_summary(grand, total_source, copies,
                   need_folding, need_binding, file_page_counts):
+    print("\n______________________")
+    print("\nИТОГОВАЯ СВОДКА")
 
-    print("\n" + "=" * 60)
-    print("ИТОГОВАЯ СВОДКА")
-    print("=" * 60)
-
-    print(f"\nВсего страниц в 1 экземпляре: {total_source}")
-    print(f"Количество экземпляров: {copies}")
+    print(f"\nВсего страниц: {total_source}")
+    print(f"Кол-во экземпляров: {copies}")
 
     print("\nРазмеры страниц:")
 
-    for key, val in sorted(grand.items()):
-        if not isinstance(val, (int, float)):
-            continue
-        if not key.startswith("A"):
-            continue
-        if val > 0:
-            print(f"{key} — {int(val) * copies} стр.")
+    # Стандартные форматы
+    std_formats = ["A4", "A3", "A2", "A1", "A0"]
+    for fmt in std_formats:
+        bw_cnt = int(grand.get(f"{fmt} ч/б", 0)) * copies
+        color_cnt = int(grand.get(f"{fmt} цвет", 0)) * copies
+
+        if bw_cnt > 0:
+            print(f"{fmt} ч/б - {bw_cnt}")
+        if color_cnt > 0:
+            print(f"{fmt} цвет - {color_cnt}")
+
+    # Нестандартные форматы
+    nonstd_formats = sorted([k for k in grand.keys() if isinstance(grand[k], (int, float)) and k.startswith(
+        "A") and k not in std_formats and "ч/б" not in k and "цвет" not in k])
+    for fmt in nonstd_formats:
+        bw_cnt = int(grand.get(f"{fmt} ч/б", 0)) * copies
+        color_cnt = int(grand.get(f"{fmt} цвет", 0)) * copies
+
+        if bw_cnt > 0:
+            print(f"{fmt} ч/б - {bw_cnt}")
+        if color_cnt > 0:
+            print(f"{fmt} цвет - {color_cnt}")
 
     # РУЛОН
     roll_bw = int(round(grand.get("Рулон ч/б мм", 0)))
@@ -339,8 +353,8 @@ def print_summary(grand, total_source, copies,
 
         for fmt in ("A3", "A2", "A1", "A0"):
             total_fmt = (
-                int(grand.get(f"{fmt} цвет", 0)) +
-                int(grand.get(f"{fmt} ч/б", 0))
+                    int(grand.get(f"{fmt} цвет", 0)) +
+                    int(grand.get(f"{fmt} ч/б", 0))
             )
             if total_fmt > 0:
                 print(f"{fmt} — {total_fmt * copies} шт.")
@@ -360,8 +374,6 @@ def print_summary(grand, total_source, copies,
         over = sum(1 for n in file_page_counts if n > thresholds[-1])
         if over > 0:
             print(f"Свыше {thresholds[-1]} стр — {over * copies} файл(ов)")
-
-    print("\n" + "=" * 60)
 
 
 def main():
