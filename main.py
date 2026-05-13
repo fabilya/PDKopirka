@@ -297,36 +297,52 @@ def analyze_pdf(path, grand, log, check_color=True):
 
 def print_summary(grand, total_source, copies,
                   need_folding, need_binding, file_page_counts):
-    print("\n______________________")
-    print("\nИТОГОВАЯ СВОДКА")
+    print("\n" + "=" * 60)
+    print("ИТОГОВАЯ СВОДКА")
+    print("=" * 60)
 
-    print(f"\nВсего страниц: {total_source}")
+    print(f"\nВсего страниц: {total_source * copies}")
     print(f"Кол-во экземпляров: {copies}")
 
-    print("\nРазмеры страниц:")
+    print("\nРазмеры и цветность страниц:")
 
-    # Стандартные форматы
-    std_formats = ["A4", "A3", "A2", "A1", "A0"]
-    for fmt in std_formats:
-        bw_cnt = int(grand.get(f"{fmt} ч/б", 0)) * copies
-        color_cnt = int(grand.get(f"{fmt} цвет", 0)) * copies
-
+    # Черно-белая печать
+    print("Черно-белая печать:")
+    bw_found = False
+    for fmt in FMT_ORDER:
+        bw_cnt = int(grand.get(f"{fmt} ч/б", 0))
         if bw_cnt > 0:
-            print(f"{fmt} ч/б - {bw_cnt}")
-        if color_cnt > 0:
-            print(f"{fmt} цвет - {color_cnt}")
+            print(f"  {fmt} - {bw_cnt * copies} стр.")
+            bw_found = True
 
-    # Нестандартные форматы
-    nonstd_formats = sorted([k for k in grand.keys() if isinstance(grand[k], (int, float)) and k.startswith(
-        "A") and k not in std_formats and "ч/б" not in k and "цвет" not in k])
-    for fmt in nonstd_formats:
-        bw_cnt = int(grand.get(f"{fmt} ч/б", 0)) * copies
-        color_cnt = int(grand.get(f"{fmt} цвет", 0)) * copies
+    for fmt in sorted(
+            [k for k in grand.keys() if k.endswith("ч/б") and not any(f == k.replace(" ч/б", "") for f in FMT_ORDER)]):
+        cnt = int(grand.get(fmt, 0))
+        if cnt > 0:
+            print(f"  {fmt} - {cnt * copies} стр.")
+            bw_found = True
 
-        if bw_cnt > 0:
-            print(f"{fmt} ч/б - {bw_cnt}")
+    if not bw_found:
+        print("  Нет")
+
+    # Цветная печать
+    print("Цветная печать:")
+    color_found = False
+    for fmt in FMT_ORDER:
+        color_cnt = int(grand.get(f"{fmt} цвет", 0))
         if color_cnt > 0:
-            print(f"{fmt} цвет - {color_cnt}")
+            print(f"  {fmt} - {color_cnt * copies} стр.")
+            color_found = True
+
+    for fmt in sorted([k for k in grand.keys() if
+                       k.endswith("цвет") and not any(f == k.replace(" цвет", "") for f in FMT_ORDER)]):
+        cnt = int(grand.get(fmt, 0))
+        if cnt > 0:
+            print(f"  {fmt} - {cnt * copies} стр.")
+            color_found = True
+
+    if not color_found:
+        print("  Нет")
 
     # РУЛОН
     roll_bw = int(round(grand.get("Рулон ч/б мм", 0)))
@@ -335,9 +351,9 @@ def print_summary(grand, total_source, copies,
     if roll_bw or roll_color:
         print("\nРулонная печать:")
         if roll_bw:
-            print(f"ч/б — {math.ceil(roll_bw / 1000)} пог. м.")
+            print(f"  ч/б — {math.ceil(roll_bw / 1000)} пог. м.")
         if roll_color:
-            print(f"цвет — {math.ceil(roll_color / 1000)} пог. м.")
+            print(f"  цвет — {math.ceil(roll_color / 1000)} пог. м.")
 
     # РЕЗКА
     cut_pages = int(grand.get("Enter (по Enter) стр", 0))
@@ -345,7 +361,7 @@ def print_summary(grand, total_source, copies,
 
     if cut_pages:
         print("\nРезка нестандартных форматов:")
-        print(f"{cut_pages} шт.")
+        print(f"  {cut_pages} шт.")
 
     # ФАЛЬЦОВКА
     if need_folding:
@@ -357,7 +373,7 @@ def print_summary(grand, total_source, copies,
                     int(grand.get(f"{fmt} ч/б", 0))
             )
             if total_fmt > 0:
-                print(f"{fmt} — {total_fmt * copies} шт.")
+                print(f"  {fmt} — {total_fmt * copies} стр.")
 
     # БРОШЮРОВКА
     if need_binding:
@@ -368,12 +384,12 @@ def print_summary(grand, total_source, copies,
         for t in thresholds:
             cnt = sum(1 for n in file_page_counts if prev < n <= t)
             if cnt > 0:
-                print(f"До {t} стр — {cnt * copies} файл(ов)")
+                print(f"  До {t} стр — {cnt * copies} файл(ов)")
             prev = t
 
         over = sum(1 for n in file_page_counts if n > thresholds[-1])
         if over > 0:
-            print(f"Свыше {thresholds[-1]} стр — {over * copies} файл(ов)")
+            print(f"  Свыше {thresholds[-1]} стр — {over * copies} файл(ов)")
 
 
 def main():
@@ -393,8 +409,13 @@ def main():
         copies = 1
 
     check_color = input("Цветность по файлам? (+ или -): ").strip() == "+"
-    need_folding = input("Нужна ли фальцовка? (+ или -): ").strip() == "+"
     need_binding = input("Нужна ли брошюровка? (+ или -): ").strip() == "+"
+
+    # Если брошюровка не требуется, спрашиваем про фальцовку
+    if need_binding:
+        need_folding = True
+    else:
+        need_folding = input("Нужна ли фальцовка? (+ или -): ").strip() == "+"
 
     pdfs = [path] if path.lower().endswith(".pdf") else [
         os.path.join(r, f)
