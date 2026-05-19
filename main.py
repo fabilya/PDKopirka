@@ -33,7 +33,7 @@ import shutil
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.1"  # ← текущая версия
+APP_VERSION = "1.0.0"  # ← текущая версия
 
 UPDATE_REPO = "fabilya/PDKopirka"  # username/repo
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -93,21 +93,15 @@ def check_for_update():
 
 
 def download_update(url: str, target_path: str, progress_callback=None) -> bool:
-    """
-    Скачивает новый .exe в target_path.
-
-    :param url: URL для загрузки
-    :param target_path: куда сохранить файл
-    :param progress_callback: функция(downloaded, total) для прогресса
-    :return: True при успехе
-    """
+    """Скачивает .exe с отображением прогресса."""
     try:
-        # Удаляем старый временный файл
-        if os.path.exists(target_path):
-            try:
-                os.remove(target_path)
-            except OSError:
-                pass
+        # Удаляем старый скачанный файл, если есть
+        for old_file in [target_path, target_path + ".part"]:
+            if os.path.exists(old_file):
+                try:
+                    os.remove(old_file)
+                except OSError:
+                    pass
 
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
@@ -115,12 +109,12 @@ def download_update(url: str, target_path: str, progress_callback=None) -> bool:
             req.add_header("Authorization", f"token {GITHUB_TOKEN}")
             req.add_header("Accept", "application/octet-stream")
 
-        temp_path = target_path + ".part"
-
         with urllib.request.urlopen(req, timeout=120) as resp:
             total_size = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
-            chunk_size = 64 * 1024
+            chunk_size = 64 * 1024  # 64 КБ
+
+            temp_path = target_path + ".part"
 
             with open(temp_path, "wb") as f:
                 while True:
@@ -129,27 +123,27 @@ def download_update(url: str, target_path: str, progress_callback=None) -> bool:
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
+
                     if progress_callback:
                         try:
                             progress_callback(downloaded, total_size)
                         except Exception:
                             pass
 
-        # Проверка целостности
+        # Проверки целостности файла
         if total_size > 0 and downloaded != total_size:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            print(f"[UPDATE] Неполная загрузка: {downloaded}/{total_size}")
             return False
 
-        if os.path.getsize(temp_path) < 1024 * 100:
+        file_size = os.path.getsize(temp_path)
+        if file_size < 1024 * 100:  # меньше 100 КБ
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            print(f"[UPDATE] Файл слишком мал")
             return False
 
         # Проверка PE-сигнатуры (MZ)
@@ -160,10 +154,9 @@ def download_update(url: str, target_path: str, progress_callback=None) -> bool:
                 os.remove(temp_path)
             except OSError:
                 pass
-            print(f"[UPDATE] Не .exe файл")
             return False
 
-        # Переименовываем
+        # Переименуем в финальный
         if os.path.exists(target_path):
             os.remove(target_path)
         os.rename(temp_path, target_path)
@@ -174,7 +167,7 @@ def download_update(url: str, target_path: str, progress_callback=None) -> bool:
         print(f"[UPDATE] HTTP {e.code}: {e.reason}")
         return False
     except urllib.error.URLError as e:
-        print(f"[UPDATE] Сеть: {e.reason}")
+        print(f"[UPDATE] Ошибка сети: {e.reason}")
         return False
     except Exception as e:
         print(f"[UPDATE] Ошибка: {e}")
@@ -183,78 +176,86 @@ def download_update(url: str, target_path: str, progress_callback=None) -> bool:
 
 def apply_update_and_restart(new_exe_path: str):
     """
-    Обновляет .exe и автоматически запускает новую версию.
+    Заменяет .exe на новый и закрывает программу.
+    Новая версия НЕ запускается автоматически.
     """
     if not getattr(sys, "frozen", False):
         return
 
     current_exe = sys.executable
     current_pid = os.getpid()
+
     tmp_dir = tempfile.gettempdir()
     bat_path = os.path.join(tmp_dir, "pdkopirka_update.bat")
-    log_path = os.path.join(tmp_dir, "pdkopirka_update.log")
+    vbs_path = os.path.join(tmp_dir, "pdkopirka_update.vbs")
 
     bat_content = f"""@echo off
 chcp 65001 >nul 2>&1
-echo [%date% %time%] Start update > "{log_path}"
 
-REM Ждём завершения процесса по PID
+REM ===== ШАГ 1: Ждём закрытия программы =====
+set /a cnt=0
 :wait_process
-tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R /C:"^[A-Za-z]" >nul 2>&1
+set /a cnt+=1
+tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R "[0-9]" >nul 2>&1
 if not errorlevel 1 (
+    if %cnt% gtr 60 goto skip_wait
     ping -n 2 127.0.0.1 >nul 2>&1
     goto wait_process
 )
-echo [%date% %time%] Process closed >> "{log_path}"
+:skip_wait
 
-REM Задержка для освобождения _MEI
-ping -n 4 127.0.0.1 >nul 2>&1
+REM ===== ШАГ 2: Минимальная задержка для освобождения файла =====
+ping -n 2 127.0.0.1 >nul 2>&1
 
-REM Заменяем файл (до 20 попыток)
-set /a attempts=0
-:retry_move
-set /a attempts+=1
+REM ===== ШАГ 3: Чистим _MEI от старых запусков =====
+for /d %%D in ("%TEMP%\\_MEI*") do rmdir /s /q "%%D" >nul 2>&1
+
+REM ===== ШАГ 4: Заменяем exe (до 15 попыток) =====
+set /a tries=0
+:replace
+set /a tries+=1
 move /y "{new_exe_path}" "{current_exe}" >nul 2>&1
 if errorlevel 1 (
-    if %attempts% lss 20 (
+    if %tries% lss 15 (
         ping -n 2 127.0.0.1 >nul 2>&1
-        goto retry_move
+        goto replace
     ) else (
-        echo [%date% %time%] FAILED to move file >> "{log_path}"
         exit /b 1
     )
 )
-echo [%date% %time%] File replaced >> "{log_path}"
 
-REM Запускаем новую версию через PowerShell в отдельном процессе
-start "" "{current_exe}"
-echo [%date% %time%] New version started >> "{log_path}"
-
-REM Удаляем сам себя
+REM ===== ШАГ 5: Самоуничтожение =====
+del "{vbs_path}" >nul 2>&1
 (goto) 2>nul & del "%~f0"
 """
 
-    with open(bat_path, "w", encoding="cp866", errors="replace") as f:
-        f.write(bat_content)
+    vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run "cmd /c """"{bat_path}""""", 0, False
+Set WshShell = Nothing
+'''
 
-    # STARTUPINFO для скрытия окна
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0  # SW_HIDE
+    try:
+        with open(bat_path, "w", encoding="cp866", errors="replace") as f:
+            f.write(bat_content)
+        with open(vbs_path, "w", encoding="utf-8") as f:
+            f.write(vbs_content)
 
-    subprocess.Popen(
-        ["cmd", "/c", bat_path],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        startupinfo=startupinfo,
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        subprocess.Popen(
+            ["wscript.exe", "//B", "//Nologo", vbs_path],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
-    # Корректное закрытие
-    QApplication.quit()
-    os._exit(0)
+        # Сразу выходим — без задержки
+        QApplication.quit()
+        sys.exit(0)
+
+    except Exception as e:
+        print(f"[UPDATE] Ошибка подготовки обновления: {e}")
+        sys.exit(1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,104 +267,87 @@ class UpdateDialog(QDialog):
         super().__init__(parent)
         self.latest_version = latest_version
         self.download_url = download_url
-        self.setWindowTitle("Обновление программы")
-        self.setFixedSize(420, 200)
-        self.setModal(True)
-        # Запрещаем закрытие
-        self.setWindowFlags(
-            Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint
-        )
-        self._build_ui()
 
-        # Автоматически запускаем обновление через 300мс после показа
-        QTimer.singleShot(300, self._do_update)
+        self.setWindowTitle("Обновление")
+        self.setFixedSize(400, 180)
+        self.setModal(True)
+
+        # Запрещаем закрытие и изменение размера
+        self.setWindowFlags(
+            Qt.WindowType.Dialog |
+            Qt.WindowType.CustomizeWindowHint |
+            Qt.WindowType.WindowTitleHint
+        )
+
+        self._build_ui()
+        # Автозапуск через 100мс после появления
+        QTimer.singleShot(100, self._do_update)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(15)
+        layout.setSpacing(12)
         layout.setContentsMargins(25, 25, 25, 25)
 
-        title = QLabel("🔄 Установка обновления")
-        title.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        title = QLabel(f"🔄 Обновление до версии {self.latest_version}")
+        title.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         title.setStyleSheet("color: #0066cc;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        info = QLabel(
-            f"Текущая версия: <b>{APP_VERSION}</b><br>"
-            f"Новая версия: <b>{self.latest_version}</b>"
-        )
-        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info.setFont(QFont("Arial", 10))
-        layout.addWidget(info)
-
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
+        self.progress.setTextVisible(False)
         layout.addWidget(self.progress)
 
-        self.status_lbl = QLabel("Подготовка к загрузке...")
+        self.status_lbl = QLabel("Подготовка...")
         self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_lbl.setStyleSheet("color: #666;")
+        self.status_lbl.setStyleSheet("color: #555;")
         layout.addWidget(self.status_lbl)
 
     def closeEvent(self, event):
-        # Запрещаем закрытие окна
         event.ignore()
 
     def keyPressEvent(self, event):
-        # Блокируем Esc и Alt+F4
-        if event.key() in (Qt.Key.Key_Escape,):
+        if event.key() == Qt.Key.Key_Escape:
             event.ignore()
-            return
-        super().keyPressEvent(event)
 
     def _do_update(self):
-        self.status_lbl.setText("Загрузка обновления...")
-        QApplication.processEvents()
-
         new_exe = os.path.join(tempfile.gettempdir(), "PDKopirka_new.exe")
 
+        # Колбэк для прогресса
         def on_progress(downloaded, total):
             if total > 0:
-                percent = int(downloaded * 100 / total)
-                self.progress.setValue(percent)
-                mb_done = downloaded / (1024 * 1024)
-                mb_total = total / (1024 * 1024)
+                pct = min(100, int(downloaded * 100 / total))
+                self.progress.setValue(pct)
+
+                mb_d = downloaded / (1024 * 1024)
+                mb_t = total / (1024 * 1024)
                 self.status_lbl.setText(
-                    f"Загрузка: {mb_done:.1f} / {mb_total:.1f} МБ ({percent}%)"
+                    f"Загрузка... {mb_d:.1f} / {mb_t:.1f} МБ ({pct}%)"
                 )
             else:
-                mb_done = downloaded / (1024 * 1024)
-                self.status_lbl.setText(f"Загружено: {mb_done:.1f} МБ")
+                mb_d = downloaded / (1024 * 1024)
+                self.status_lbl.setText(f"Загрузка... {mb_d:.1f} МБ")
             QApplication.processEvents()
 
-        try:
-            success = download_update(self.download_url, new_exe, progress_callback=on_progress)
-        except Exception as e:
-            print(f"[UPDATE] Исключение при загрузке: {e}")
-            success = False
+        self.status_lbl.setText("Скачивание обновления...")
+        QApplication.processEvents()
+
+        success = download_update(self.download_url, new_exe, progress_callback=on_progress)
 
         if not success:
-            self.status_lbl.setText("❌ Ошибка загрузки. Программа закроется.")
+            self.status_lbl.setText("❌ Ошибка загрузки. Попробуйте позже.")
             self.progress.setValue(0)
             QApplication.processEvents()
             time.sleep(3)
             os._exit(1)
             return
 
-        # Проверяем, что файл реально существует
-        if not os.path.exists(new_exe) or os.path.getsize(new_exe) < 1024 * 100:
-            self.status_lbl.setText("❌ Файл повреждён. Программа закроется.")
-            QApplication.processEvents()
-            time.sleep(3)
-            os._exit(1)
-            return
-
         self.progress.setValue(100)
-        self.status_lbl.setText("✅ Загружено. Применение обновления...")
+        self.status_lbl.setText("✅ Загружено! Программа закроется...")
         QApplication.processEvents()
-        time.sleep(1)
+
         apply_update_and_restart(new_exe)
 
 
@@ -1132,10 +1116,10 @@ class PrintingCalculator(QMainWindow):
         ml.setSpacing(10)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.create_input_tab(),   "📁 1")
+        self.tabs.addTab(self.create_input_tab(),   "📁 ВВОД")
         self.tabs.addTab(self.create_details_tab(), "📊 2")
-        self.tabs.addTab(self.create_manager_tab(), "👔 Для менеджера")
-        self.tabs.addTab(self.create_report_tab(),  "📄 Отчет")
+        self.tabs.addTab(self.create_manager_tab(), "👔 4")
+        self.tabs.addTab(self.create_report_tab(),  "📄 3")
         ml.addWidget(self.tabs)
 
     def create_input_tab(self):
@@ -1824,35 +1808,34 @@ class PrintingCalculator(QMainWindow):
 def main():
     app = QApplication(sys.argv)
 
-    # 1. Проверка лицензии
+    # 1. Лицензия
     ok, msg = check_remote_license()
     if not ok:
         QMessageBox.critical(None, "Доступ запрещён", msg)
         sys.exit(1)
 
-    # 2. ОБЯЗАТЕЛЬНАЯ проверка и установка обновлений (только для .exe)
+    # 2. ОБНОВЛЕНИЕ (обязательное для .exe, автоматическое)
     if getattr(sys, "frozen", False):
         try:
             has_update, latest_ver, dl_url = check_for_update()
             if has_update:
+                # Принудительное обновление — выбора нет
                 upd_dlg = UpdateDialog(latest_ver, dl_url)
                 upd_dlg.exec()
-                # Сюда не дойдём — apply_update_and_restart вызывает os._exit
+                # Сюда не придём, т.к. вызов sys.exit() внутри диалога
         except Exception as e:
-            print(f"[UPDATE] {e}")
-            QMessageBox.critical(
-                None, "Ошибка обновления",
-                "Не удалось проверить наличие обновлений.\n"
-                "Проверьте подключение к интернету и запустите программу заново."
-            )
-            sys.exit(1)
+            print(f"[UPDATE] Ошибка: {e}")
+            QMessageBox.warning(None, "Обновление",
+                "Не удалось проверить обновления.\n"
+                "Программа продолжит работу со старой версией.")
+            # Не выходим — работаем дальше
 
     # 3. Авторизация
     dlg = LoginDialog()
     if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.authenticated:
         sys.exit(0)
 
-    # 4. Основное окно
+    # 4. Главное окно
     window = PrintingCalculator()
     window.show()
     sys.exit(app.exec())
