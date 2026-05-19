@@ -999,9 +999,11 @@ class AnalysisThread(QThread):
                                 mm = float(value) * len(pages)
                                 if col:
                                     grand["Рулон цвет мм"] += mm
+                                    grand["Рулон цвет стр"] += len(pages)  # ← НОВОЕ
                                     frc += mm; frc_p.extend(pages)
                                 else:
                                     grand["Рулон ч/б мм"] += mm
+                                    grand["Рулон ч/б стр"] += len(pages)  # ← НОВОЕ
                                     frb += mm; frb_p.extend(pages)
 
                         file_details.append({
@@ -1530,9 +1532,11 @@ class PrintingCalculator(QMainWindow):
     def _calc_folding(self, target):
         sl, nl, tf = [], [], 0
         if target == "A4":
-            sf = ["A3", "A2", "A1", "A0"]; ex = {"A4"}
+            sf = ["A3", "A2", "A1", "A0"];
+            ex = {"A4"}
         elif target == "A3":
-            sf = ["A2", "A1", "A0"]; ex = {"A4", "A3"}
+            sf = ["A2", "A1", "A0"];
+            ex = {"A4", "A3"}
         else:
             return sl, nl, tf
 
@@ -1540,13 +1544,15 @@ class PrintingCalculator(QMainWindow):
             qty = (int(self.grand.get(f"{fmt} цвет", 0)) +
                    int(self.grand.get(f"{fmt} ч/б", 0))) * self.copies
             if qty > 0:
-                sl.append(f"{fmt} → {target} — {qty} шт."); tf += qty
+                sl.append(f"{fmt} → {target} — {qty} шт.");
+                tf += qty
 
         for fmt in ISO_A_NONSTANDARD:
             qty = (int(self.grand.get(f"{fmt} цвет", 0)) +
                    int(self.grand.get(f"{fmt} ч/б", 0))) * self.copies
             if qty > 0:
-                nl.append(f"{fmt} → {target} — {qty} шт."); tf += qty
+                nl.append(f"{fmt} → {target} — {qty} шт.");
+                tf += qty
 
         ct = defaultdict(int)
         for k in self.grand:
@@ -1557,7 +1563,16 @@ class PrintingCalculator(QMainWindow):
         for fmt in sorted(ct):
             qty = ct[fmt] * self.copies
             if qty > 0:
-                nl.append(f"{fmt} → {target} — {qty} шт."); tf += qty
+                nl.append(f"{fmt} → {target} — {qty} шт.");
+                tf += qty
+
+        # ── НОВОЕ: рулонные страницы ──────────────────────────────────────────
+        roll_qty = (int(self.grand.get("Рулон ч/б стр", 0)) +
+                    int(self.grand.get("Рулон цвет стр", 0))) * self.copies
+        if roll_qty > 0:
+            nl.append(f"Рулон → {target} — {roll_qty} шт.")
+            tf += roll_qty
+        # ─────────────────────────────────────────────────────────────────────
 
         return sl, nl, tf
 
