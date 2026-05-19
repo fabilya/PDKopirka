@@ -537,27 +537,48 @@ class AnalysisThread(QThread):
         self._wait_event.clear()
         self._wait_event.wait()
 
-    def detect_page_color(self, page, tol=5, white_thr=245,
-                          min_colored_pixels=50, min_colored_ratio=0.002):
+    def detect_page_color(self, page, tol=15, white_thr=240,
+                          min_colored_pixels=30, min_colored_ratio=0.00005):
+        """
+        Определяет, есть ли на странице цветные элементы.
+        Параметры подобраны для распознавания мелких подписей и линий.
+        """
         try:
             scale = 200 / 72
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                  colorspace=fitz.csRGB, alpha=False)
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale),
+                colorspace=fitz.csRGB, alpha=False
+            )
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             a = np.asarray(img, dtype=np.uint8)
             if a.ndim != 3:
                 return False
-            r, g, b = (a[..., i].astype(np.int16) for i in range(3))
+
+            r = a[..., 0].astype(np.int16)
+            g = a[..., 1].astype(np.int16)
+            b = a[..., 2].astype(np.int16)
+
             mx = np.maximum(np.maximum(r, g), b)
             mn = np.minimum(np.minimum(r, g), b)
+
+            # Не белые пиксели (есть какое-то содержимое)
             ink = mx < white_thr
             ink_count = int(ink.sum())
             if ink_count == 0:
                 return False
-            colored = ink & ((mx - mn) > tol)
+
+            # Цветные пиксели: разница между макс и мин каналом значительна
+            diff = mx - mn
+            colored = ink & (diff > tol)
             colored_count = int(colored.sum())
-            return (colored_count >= min_colored_pixels and
-                    (colored_count / ink_count) >= min_colored_ratio)
+
+            # Проверка по абсолютному количеству ИЛИ по проценту
+            if colored_count >= min_colored_pixels:
+                return True
+            if (colored_count / ink_count) >= min_colored_ratio:
+                return True
+
+            return False
         except Exception:
             return False
 
