@@ -33,7 +33,7 @@ import shutil
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.0"  # ← текущая версия
+APP_VERSION = "1.0.1"  # ← текущая версия
 
 UPDATE_REPO = "fabilya/PDKopirka"  # username/repo
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -92,21 +92,92 @@ def check_for_update():
         return False, None, None
 
 
-def download_update(url: str, target_path: str) -> bool:
-    """Скачивает новый .exe в target_path."""
+def download_update(url: str, target_path: str, progress_callback=None) -> bool:
+    """
+    Скачивает новый .exe в target_path.
+
+    :param url: URL для загрузки
+    :param target_path: куда сохранить файл
+    :param progress_callback: функция(downloaded, total) для прогресса
+    :return: True при успехе
+    """
     try:
+        # Удаляем старый временный файл
+        if os.path.exists(target_path):
+            try:
+                os.remove(target_path)
+            except OSError:
+                pass
+
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
         if GITHUB_TOKEN:
             req.add_header("Authorization", f"token {GITHUB_TOKEN}")
             req.add_header("Accept", "application/octet-stream")
 
+        temp_path = target_path + ".part"
+
         with urllib.request.urlopen(req, timeout=120) as resp:
-            with open(target_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+            total_size = int(resp.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 64 * 1024
+
+            with open(temp_path, "wb") as f:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback:
+                        try:
+                            progress_callback(downloaded, total_size)
+                        except Exception:
+                            pass
+
+        # Проверка целостности
+        if total_size > 0 and downloaded != total_size:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            print(f"[UPDATE] Неполная загрузка: {downloaded}/{total_size}")
+            return False
+
+        if os.path.getsize(temp_path) < 1024 * 100:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            print(f"[UPDATE] Файл слишком мал")
+            return False
+
+        # Проверка PE-сигнатуры (MZ)
+        with open(temp_path, "rb") as f:
+            magic = f.read(2)
+        if magic != b"MZ":
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            print(f"[UPDATE] Не .exe файл")
+            return False
+
+        # Переименовываем
+        if os.path.exists(target_path):
+            os.remove(target_path)
+        os.rename(temp_path, target_path)
+
         return True
+
+    except urllib.error.HTTPError as e:
+        print(f"[UPDATE] HTTP {e.code}: {e.reason}")
+        return False
+    except urllib.error.URLError as e:
+        print(f"[UPDATE] Сеть: {e.reason}")
+        return False
     except Exception as e:
-        print(f"[UPDATE] Ошибка загрузки: {e}")
+        print(f"[UPDATE] Ошибка: {e}")
         return False
 
 
@@ -121,24 +192,25 @@ def apply_update_and_restart(new_exe_path: str):
     current_pid = os.getpid()
     tmp_dir = tempfile.gettempdir()
     bat_path = os.path.join(tmp_dir, "pdkopirka_update.bat")
-    vbs_path = os.path.join(tmp_dir, "pdkopirka_update.vbs")
+    log_path = os.path.join(tmp_dir, "pdkopirka_update.log")
 
-    # Используем PID напрямую для надёжного ожидания
     bat_content = f"""@echo off
 chcp 65001 >nul 2>&1
+echo [%date% %time%] Start update > "{log_path}"
 
-REM Ждём завершения процесса по PID (надёжный способ)
+REM Ждём завершения процесса по PID
 :wait_process
-tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R /C:"^[0-9]" >nul 2>&1
+tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R /C:"^[A-Za-z]" >nul 2>&1
 if not errorlevel 1 (
     ping -n 2 127.0.0.1 >nul 2>&1
     goto wait_process
 )
+echo [%date% %time%] Process closed >> "{log_path}"
 
-REM Дополнительная задержка для освобождения файлов
+REM Задержка для освобождения _MEI
 ping -n 4 127.0.0.1 >nul 2>&1
 
-REM Пытаемся заменить файл (до 20 попыток)
+REM Заменяем файл (до 20 попыток)
 set /a attempts=0
 :retry_move
 set /a attempts+=1
@@ -148,37 +220,39 @@ if errorlevel 1 (
         ping -n 2 127.0.0.1 >nul 2>&1
         goto retry_move
     ) else (
+        echo [%date% %time%] FAILED to move file >> "{log_path}"
         exit /b 1
     )
 )
+echo [%date% %time%] File replaced >> "{log_path}"
 
-REM Запускаем новую версию через PowerShell (полностью независимо)
-powershell.exe -WindowStyle Hidden -NoProfile -Command "& {{ Start-Process -FilePath '{current_exe}' -WindowStyle Normal }}"
+REM Запускаем новую версию через PowerShell в отдельном процессе
+start "" "{current_exe}"
+echo [%date% %time%] New version started >> "{log_path}"
 
-REM Удаляем временные файлы
-del "{vbs_path}" >nul 2>&1
+REM Удаляем сам себя
 (goto) 2>nul & del "%~f0"
 """
 
-    vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run Chr(34) & "{bat_path}" & Chr(34), 0, False
-Set WshShell = Nothing
-'''
-
     with open(bat_path, "w", encoding="cp866", errors="replace") as f:
         f.write(bat_content)
-    with open(vbs_path, "w", encoding="utf-8") as f:
-        f.write(vbs_content)
+
+    # STARTUPINFO для скрытия окна
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0  # SW_HIDE
 
     subprocess.Popen(
-        ["wscript.exe", vbs_path],
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        ["cmd", "/c", bat_path],
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        startupinfo=startupinfo,
         close_fds=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
+    # Корректное закрытие
     QApplication.quit()
     os._exit(0)
 
@@ -264,11 +338,23 @@ class UpdateDialog(QDialog):
                 self.status_lbl.setText(f"Загружено: {mb_done:.1f} МБ")
             QApplication.processEvents()
 
-        success = download_update(self.download_url, new_exe, progress_callback=on_progress)
+        try:
+            success = download_update(self.download_url, new_exe, progress_callback=on_progress)
+        except Exception as e:
+            print(f"[UPDATE] Исключение при загрузке: {e}")
+            success = False
 
         if not success:
             self.status_lbl.setText("❌ Ошибка загрузки. Программа закроется.")
             self.progress.setValue(0)
+            QApplication.processEvents()
+            time.sleep(3)
+            os._exit(1)
+            return
+
+        # Проверяем, что файл реально существует
+        if not os.path.exists(new_exe) or os.path.getsize(new_exe) < 1024 * 100:
+            self.status_lbl.setText("❌ Файл повреждён. Программа закроется.")
             QApplication.processEvents()
             time.sleep(3)
             os._exit(1)
@@ -1046,8 +1132,8 @@ class PrintingCalculator(QMainWindow):
         ml.setSpacing(10)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.create_input_tab(),   "📁 Ввод данных")
-        self.tabs.addTab(self.create_details_tab(), "📊 Детализация по файлам")
+        self.tabs.addTab(self.create_input_tab(),   "📁 1")
+        self.tabs.addTab(self.create_details_tab(), "📊 2")
         self.tabs.addTab(self.create_manager_tab(), "👔 Для менеджера")
         self.tabs.addTab(self.create_report_tab(),  "📄 Отчет")
         ml.addWidget(self.tabs)
