@@ -14,6 +14,7 @@ import urllib.request
 import urllib.error
 from collections import defaultdict
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pymupdf as fitz
 import numpy as np
@@ -24,7 +25,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QProgressBar, QFrame,
     QScrollArea, QDialog, QLineEdit, QMessageBox, QGroupBox,
-    QRadioButton, QButtonGroup, QSizePolicy
+    QRadioButton, QButtonGroup, QSizePolicy, QHeaderView
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QFont, QIcon
@@ -66,17 +67,16 @@ def _get_log_path():
 
 
 def _write_log(msg):
-        pass
+    """Логирование отключено."""
+    pass
 
 
 def _make_ssl_context_certifi():
-    """SSL-контекст с сертификатами из certifi."""
     if not _HAS_CERTIFI:
         return None
     try:
         return ssl.create_default_context(cafile=certifi.where())
-    except Exception as e:
-        _write_log(f"Ошибка создания SSL контекста (certifi): {e}")
+    except Exception:
         return None
 
 
@@ -91,42 +91,34 @@ def _urlopen_safe(req, timeout=15):
     ctx = _make_ssl_context_certifi()
     if ctx is not None:
         try:
-            _write_log("SSL: попытка с сертификатами certifi")
             return urllib.request.urlopen(req, timeout=timeout, context=ctx)
         except ssl.SSLError as e:
             last_error = e
-            _write_log(f"SSL ошибка (certifi): {e}")
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLError):
                 last_error = e
-                _write_log(f"URL/SSL ошибка (certifi): {e.reason}")
             else:
                 raise
 
     # Попытка 2: системный default
     try:
-        _write_log("SSL: попытка с системными сертификатами")
         ctx = ssl.create_default_context()
         return urllib.request.urlopen(req, timeout=timeout, context=ctx)
     except ssl.SSLError as e:
         last_error = e
-        _write_log(f"SSL ошибка (системные): {e}")
     except urllib.error.URLError as e:
         if isinstance(e.reason, ssl.SSLError):
             last_error = e
-            _write_log(f"URL/SSL ошибка (системные): {e.reason}")
         else:
             raise
 
-    # Попытка 3: без проверки SSL (для корп. сетей с MITM-антивирусом)
+    # Попытка 3: без проверки SSL
     try:
-        _write_log("SSL: попытка БЕЗ проверки сертификата (небезопасно)")
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         return urllib.request.urlopen(req, timeout=timeout, context=ctx)
     except Exception as e:
-        _write_log(f"SSL ошибка (без проверки): {e}")
         if last_error:
             raise last_error
         raise
@@ -143,14 +135,7 @@ def _parse_version(v):
 
 
 def check_for_update():
-    """
-    Возвращает (has_update, latest_ver, dl_url, error_msg).
-    error_msg = None, если ошибок не было.
-    """
-    _write_log(f"Проверка обновления. Текущая версия: {APP_VERSION}")
-    _write_log(f"URL: {UPDATE_API_URL}")
-    _write_log(f"certifi доступен: {_HAS_CERTIFI}")
-
+    """Возвращает (has_update, latest_ver, dl_url, error_msg)."""
     try:
         req = urllib.request.Request(UPDATE_API_URL)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
@@ -159,26 +144,16 @@ def check_for_update():
             req.add_header("Authorization", f"token {GITHUB_TOKEN}")
 
         with _urlopen_safe(req, timeout=15) as resp:
-            _write_log(f"Ответ GitHub: HTTP {resp.status}")
             data = json.loads(resp.read().decode("utf-8"))
 
         latest_tag = data.get("tag_name", "")
-        _write_log(f"Последний релиз: {latest_tag}")
-
         if not latest_tag:
-            msg = "GitHub вернул пустой tag_name."
-            _write_log(f"ОШИБКА: {msg}")
-            return False, None, None, msg
+            return False, None, None, "GitHub вернул пустой tag_name."
 
         if _parse_version(latest_tag) <= _parse_version(APP_VERSION):
-            _write_log(f"Обновление не требуется: {latest_tag} <= {APP_VERSION}")
             return False, None, None, None
 
-        _write_log(f"Найдено обновление: {APP_VERSION} → {latest_tag}")
-
         assets = data.get("assets", [])
-        _write_log(f"Assets: {[a['name'] for a in assets]}")
-
         download_url = None
         for asset in assets:
             if asset["name"].lower().endswith(".exe"):
@@ -189,30 +164,19 @@ def check_for_update():
                 break
 
         if not download_url:
-            msg = f"В релизе {latest_tag} не найден .exe файл."
-            _write_log(f"ОШИБКА: {msg}")
-            return False, None, None, msg
+            return False, None, None, f"В релизе {latest_tag} не найден .exe файл."
 
         return True, latest_tag, download_url, None
 
     except urllib.error.HTTPError as e:
-        msg = f"HTTP ошибка: {e.code} {e.reason}"
-        _write_log(f"ОШИБКА: {msg}")
-        return False, None, None, msg
-
+        return False, None, None, f"HTTP ошибка: {e.code} {e.reason}"
     except urllib.error.URLError as e:
-        msg = f"Нет доступа к GitHub: {e.reason}"
-        _write_log(f"ОШИБКА: {msg}")
-        return False, None, None, msg
-
+        return False, None, None, f"Нет доступа к GitHub: {e.reason}"
     except Exception as e:
-        msg = f"{type(e).__name__}: {e}"
-        _write_log(f"ОШИБКА: {msg}")
-        return False, None, None, msg
+        return False, None, None, f"{type(e).__name__}: {e}"
 
 
 def download_update(url, target_path, progress_callback=None):
-    _write_log(f"Начало загрузки: {url}")
     try:
         for old in [target_path, target_path + ".part"]:
             if os.path.exists(old):
@@ -229,7 +193,6 @@ def download_update(url, target_path, progress_callback=None):
 
         with _urlopen_safe(req, timeout=120) as resp:
             total_size = int(resp.headers.get("Content-Length", 0))
-            _write_log(f"Размер: {total_size} байт")
             downloaded = 0
             chunk_size = 64 * 1024
             temp_path = target_path + ".part"
@@ -247,7 +210,6 @@ def download_update(url, target_path, progress_callback=None):
                             pass
 
         if total_size > 0 and downloaded != total_size:
-            _write_log(f"ОШИБКА: загружено {downloaded} из {total_size}")
             try:
                 os.remove(temp_path)
             except OSError:
@@ -255,7 +217,6 @@ def download_update(url, target_path, progress_callback=None):
             return False
 
         if os.path.getsize(temp_path) < 1024 * 100:
-            _write_log("ОШИБКА: файл слишком маленький")
             try:
                 os.remove(temp_path)
             except OSError:
@@ -265,7 +226,6 @@ def download_update(url, target_path, progress_callback=None):
         with open(temp_path, "rb") as f:
             magic = f.read(2)
         if magic != b"MZ":
-            _write_log(f"ОШИБКА: не .exe (magic: {magic.hex()})")
             try:
                 os.remove(temp_path)
             except OSError:
@@ -275,18 +235,15 @@ def download_update(url, target_path, progress_callback=None):
         if os.path.exists(target_path):
             os.remove(target_path)
         os.rename(temp_path, target_path)
-        _write_log(f"Файл сохранён: {target_path}")
         return True
 
-    except Exception as e:
-        _write_log(f"ОШИБКА загрузки: {type(e).__name__}: {e}")
+    except Exception:
         return False
 
 
 def apply_update_and_restart(new_exe_path):
     if not getattr(sys, "frozen", False):
         return
-    _write_log("Запуск процедуры обновления...")
     current_exe = sys.executable
     current_pid = os.getpid()
     tmp_dir = tempfile.gettempdir()
@@ -339,8 +296,7 @@ Set WshShell = Nothing
         )
         QApplication.quit()
         sys.exit(0)
-    except Exception as e:
-        _write_log(f"ОШИБКА запуска обновления: {e}")
+    except Exception:
         sys.exit(1)
 
 
@@ -445,6 +401,7 @@ CHANGELOG_HTML = """
     <li>🌀 <b>Учёт рулонных страниц при фальцовке</b> — теперь рулонные форматы корректно попадают в расчёт фальцовки с указанием <b>реальных размеров</b></li>
     <li>📄 <b>Детализированный вывод рулонных групп</b> в детализации по файлам с указанием размеров каждой страницы</li>
     <li>🎉 <b>Окно «Что нового»</b> — после обновления показывается список изменений</li>
+    <li>💾 <b>История расчётов</b> — теперь можно сохранять расчёты и возвращаться к ним позже без повторного анализа</li>
     <li>🔗 <b>Ссылки на нижней панели</b> главной вкладки:
         <ul>
             <li>⭐ Оставить благодарность в Bitrix</li>
@@ -515,6 +472,79 @@ class WhatsNewDialog(QDialog):
         lay.addWidget(btn)
 
         self.setStyleSheet("QDialog { background-color: #f5f6f7; }")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# История расчётов
+# ─────────────────────────────────────────────────────────────────────────────
+class SortableTableItem(QTableWidgetItem):
+    """QTableWidgetItem с раздельным значением для отображения и сортировки."""
+    def __init__(self, display_text, sort_value):
+        super().__init__(str(display_text))
+        self._sort_value = sort_value
+
+    def __lt__(self, other):
+        if isinstance(other, SortableTableItem):
+            try:
+                return self._sort_value < other._sort_value
+            except TypeError:
+                return str(self._sort_value) < str(other._sort_value)
+        return super().__lt__(other)
+
+
+class HistoryManager:
+    @staticmethod
+    def get_dir():
+        appdata = os.environ.get('APPDATA', os.path.expanduser('~'))
+        path = Path(appdata) / 'PDKopirka' / 'history'
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _sanitize_filename(name):
+        return re.sub(r'[<>:"/\\|?*\n\r\t]', '_', name)[:80].strip() or "Без_названия"
+
+    @staticmethod
+    def save(calc_data, name):
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        safe_name = HistoryManager._sanitize_filename(name)
+        filename = f"{ts}__{safe_name}.json"
+        filepath = HistoryManager.get_dir() / filename
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(calc_data, f, ensure_ascii=False, indent=2)
+        return filepath
+
+    @staticmethod
+    def list_all():
+        items = []
+        for path in HistoryManager.get_dir().glob('*.json'):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                items.append({
+                    'path': str(path),
+                    'name': data.get('name', path.stem),
+                    'saved_at': data.get('saved_at', ''),
+                    'data': data,
+                })
+            except Exception:
+                continue
+        items.sort(key=lambda x: x['saved_at'], reverse=True)
+        return items
+
+    @staticmethod
+    def load(filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    @staticmethod
+    def delete(filepath):
+        try:
+            os.remove(filepath)
+            return True
+        except OSError:
+            return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1342,7 +1372,9 @@ class PrintingCalculator(QMainWindow):
         self.need_folding_a4 = self.need_folding_a3 = False
         self.need_binding_a4 = self.need_binding_a3 = False
         self.thread = self.current_dialog = None
+        self._history_items = []
         self.init_ui()
+        QTimer.singleShot(100, self.refresh_history)
 
     def apply_style(self):
         self.setStyleSheet(f"""
@@ -1379,6 +1411,10 @@ class PrintingCalculator(QMainWindow):
             QRadioButton:disabled {{ color: #aaa; }}
             QRadioButton::indicator:disabled {{ background-color: #eee;
                 border: 2px solid #ddd; }}
+            QTableWidget {{ background-color: white; gridline-color: #ddd;
+                selection-background-color: #cce4ff; selection-color: #000; }}
+            QHeaderView::section {{ background-color: #e8e8e8; padding: 6px;
+                border: 1px solid #ddd; font-weight: bold; color: #333; }}
         """)
 
     def init_ui(self):
@@ -1388,10 +1424,11 @@ class PrintingCalculator(QMainWindow):
         ml.setContentsMargins(10, 10, 10, 10)
         ml.setSpacing(10)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.create_input_tab(),   "📁 Ввод данных")
+        self.tabs.addTab(self.create_input_tab(),   "📁 Параметры")
         self.tabs.addTab(self.create_details_tab(), "📊 Детализация файлов")
         self.tabs.addTab(self.create_manager_tab(), "👔 Для менеджера (CRM)")
         self.tabs.addTab(self.create_report_tab(),  "📄 Для клиента")
+        self.tabs.addTab(self.create_history_tab(), "📚 История расчетов")
         ml.addWidget(self.tabs)
 
     def _bold_label(self, text, size=11):
@@ -1667,10 +1704,91 @@ class PrintingCalculator(QMainWindow):
         self.text_report.setReadOnly(True)
         self.text_report.setFont(QFont("Courier", 9))
         lay.addWidget(self.text_report)
+
         bc = QPushButton("📋 Копировать в буфер обмена")
         bc.setMinimumHeight(40)
         bc.clicked.connect(self.copy_report)
         lay.addWidget(bc)
+
+        return w
+
+    # ── Вкладка истории ──────────────────────────────────────────────────
+
+    def create_history_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(10)
+
+        header = QHBoxLayout()
+        header.addWidget(self._bold_label("📚 История расчётов:"))
+        header.addStretch()
+        btn_refresh = QPushButton("🔄 Обновить")
+        btn_refresh.clicked.connect(self.refresh_history)
+        header.addWidget(btn_refresh)
+        lay.addLayout(header)
+
+        hint = QLabel(
+            "💡 Расчёты сохраняются автоматически. "
+            "Двойной клик по строке — загрузить расчёт. "
+            "Клик по заголовку столбца — сортировка."
+        )
+        hint.setStyleSheet("color: #666; font-size: 10px; padding: 4px;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(4)
+        self.history_table.setHorizontalHeaderLabels([
+            "Дата и время", "Название", "Файлов", "Страниц"
+        ])
+        self.history_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
+        self.history_table.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
+        self.history_table.setSelectionMode(
+            QTableWidget.SelectionMode.SingleSelection
+        )
+        self.history_table.cellDoubleClicked.connect(self.load_history_item)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.setStyleSheet(
+            "QTableWidget { alternate-background-color: #f8f9fa; }"
+        )
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setSortingEnabled(True)
+        lay.addWidget(self.history_table)
+
+        btns = QHBoxLayout()
+        btn_load = QPushButton("📂 Загрузить выбранный")
+        btn_load.setMinimumHeight(40)
+        btn_load.clicked.connect(self.load_selected_history)
+        btns.addWidget(btn_load)
+
+        btn_delete = QPushButton("🗑 Удалить выбранный")
+        btn_delete.setMinimumHeight(40)
+        btn_delete.setStyleSheet(
+            "QPushButton { background-color: #d33; color: white; border: none; "
+            "padding: 8px 16px; border-radius: 4px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #a00; }"
+        )
+        btn_delete.clicked.connect(self.delete_selected_history)
+        btns.addWidget(btn_delete)
+
+        btns.addStretch()
+
+        btn_folder = QPushButton("📁 Открыть папку истории")
+        btn_folder.setMinimumHeight(40)
+        btn_folder.setStyleSheet(
+            "QPushButton { background-color: #888; color: white; border: none; "
+            "padding: 8px 16px; border-radius: 4px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #666; }"
+        )
+        btn_folder.clicked.connect(self.open_history_folder)
+        btns.addWidget(btn_folder)
+
+        lay.addLayout(btns)
         return w
 
     # ── Действия ─────────────────────────────────────────────────────────
@@ -1769,6 +1887,56 @@ class PrintingCalculator(QMainWindow):
         self.display_details()
         self.calculate_and_display()
 
+        # Автосохранение в историю
+        if self.grand and not (self.thread and self.thread._stop_requested):
+            self._auto_save_to_history()
+
+    def _auto_save_to_history(self):
+        """Автосохранение текущего расчёта в историю."""
+        if not self.grand:
+            return
+        try:
+            # Имя = название папки (или имя PDF, если выбран один файл)
+            if self.selected_path:
+                base = os.path.basename(self.selected_path.rstrip("\\/"))
+                if base.lower().endswith(".pdf"):
+                    base = os.path.splitext(base)[0]
+                name = base or "Расчёт"
+            else:
+                name = "Расчёт"
+
+            calc_data = {
+                'version': 1,
+                'app_version': APP_VERSION,
+                'saved_at': datetime.now().isoformat(),
+                'name': name,
+                'source': {
+                    'path': self.selected_path,
+                    'files_count': len(self.file_page_counts),
+                    'total_pages': self.total_source,
+                },
+                'params': {
+                    'copies': self.copies,
+                    'force_bw': self.force_bw,
+                    'folding': (
+                        'A4' if self.need_folding_a4
+                        else ('A3' if self.need_folding_a3 else None)
+                    ),
+                    'binding': (
+                        'A4' if self.need_binding_a4
+                        else ('A3' if self.need_binding_a3 else None)
+                    ),
+                },
+                'grand': self.grand,
+                'file_page_counts': self.file_page_counts,
+                'file_details': self.file_details,
+                'report_text': self.text_report.toPlainText(),
+            }
+            HistoryManager.save(calc_data, name)
+            self.refresh_history()
+        except Exception as e:
+            print(f"Ошибка автосохранения: {e}")
+
     def analysis_stopped(self):
         self.label_status.setText("⏹ Анализ остановлен пользователем")
         self.btn_analyze.setEnabled(True)
@@ -1778,6 +1946,202 @@ class PrintingCalculator(QMainWindow):
         self.label_status.setText(f"❌ {error}")
         self.btn_analyze.setEnabled(True)
         self.btn_stop.setEnabled(False)
+
+    # ── История: сохранение/загрузка ─────────────────────────────────────
+
+    def refresh_history(self):
+        try:
+            items = HistoryManager.list_all()
+        except Exception:
+            items = []
+
+        self._history_items = items
+
+        # Отключаем сортировку на время заполнения
+        self.history_table.setSortingEnabled(False)
+        self.history_table.setRowCount(len(items))
+
+        for row, item in enumerate(items):
+            data = item['data']
+            try:
+                dt = datetime.fromisoformat(data.get('saved_at', ''))
+                date_str = dt.strftime("%d.%m.%Y %H:%M:%S")
+                sort_key = dt.strftime("%Y%m%d%H%M%S")  # строка для корректной сортировки
+            except Exception:
+                date_str = "—"
+                sort_key = "0"
+
+            src = data.get('source', {})
+            files_count = src.get('files_count', 0)
+            total_pages = src.get('total_pages', 0)
+
+            # Колонка 0 — Дата (текст для отображения, sort_key для сортировки)
+            date_item = SortableTableItem(date_str, sort_key)
+            date_item.setData(Qt.ItemDataRole.UserRole, row)
+            self.history_table.setItem(row, 0, date_item)
+
+            # Колонка 1 — Название
+            name_item = QTableWidgetItem(data.get('name', ''))
+            name_item.setData(Qt.ItemDataRole.UserRole, row)
+            self.history_table.setItem(row, 1, name_item)
+
+            # Колонка 2 — Файлов (числовая сортировка)
+            files_item = SortableTableItem(str(files_count), files_count)
+            files_item.setData(Qt.ItemDataRole.UserRole, row)
+            files_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.history_table.setItem(row, 2, files_item)
+
+            # Колонка 3 — Страниц (числовая сортировка)
+            pages_item = SortableTableItem(str(total_pages), total_pages)
+            pages_item.setData(Qt.ItemDataRole.UserRole, row)
+            pages_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.history_table.setItem(row, 3, pages_item)
+
+        header = self.history_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+
+        self.history_table.setSortingEnabled(True)
+        # Сортировка по умолчанию — дата по убыванию (новые сверху)
+        self.history_table.sortItems(0, Qt.SortOrder.DescendingOrder)
+
+    def _load_history_data(self, data):
+        """Восстанавливает состояние из сохранённого расчёта."""
+        try:
+            self.grand = data.get('grand', {})
+            self.total_source = data.get('source', {}).get('total_pages', 0)
+            self.file_page_counts = data.get('file_page_counts', [])
+            self.file_details = data.get('file_details', [])
+            self.selected_path = data.get('source', {}).get('path', '')
+
+            if self.selected_path:
+                self.label_path.setText(f"✓ {self.selected_path}")
+
+            params = data.get('params', {})
+            self.copies = params.get('copies', 1)
+            self.force_bw = params.get('force_bw', False)
+
+            self.spinbox_copies.blockSignals(True)
+            self.spinbox_copies.setValue(self.copies)
+            self.spinbox_copies.blockSignals(False)
+
+            folding = params.get('folding')
+            if folding == 'A4':
+                self.rb_folding_a4.setChecked(True)
+                self.need_folding_a4, self.need_folding_a3 = True, False
+            elif folding == 'A3':
+                self.rb_folding_a3.setChecked(True)
+                self.need_folding_a4, self.need_folding_a3 = False, True
+            else:
+                self.rb_folding_none.setChecked(True)
+                self.need_folding_a4 = self.need_folding_a3 = False
+
+            binding = params.get('binding')
+            if binding == 'A4':
+                self.rb_binding_a4.setChecked(True)
+                self.need_binding_a4, self.need_binding_a3 = True, False
+            elif binding == 'A3':
+                self.rb_binding_a3.setChecked(True)
+                self.need_binding_a4, self.need_binding_a3 = False, True
+            else:
+                self.rb_binding_none.setChecked(True)
+                self.need_binding_a4 = self.need_binding_a3 = False
+
+            if self.force_bw:
+                self.rb_color_bw.setChecked(True)
+            else:
+                self.rb_color_auto.setChecked(True)
+
+            self.display_details()
+            self.calculate_and_display()
+
+            self.tabs.setCurrentIndex(1)
+            self.label_status.setText(
+                f"📂 Загружен расчёт: {data.get('name', '')}"
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Ошибка загрузки",
+                f"Не удалось загрузить расчёт:\n{e}"
+            )
+
+    def _get_item_index_at_row(self, row):
+        """Возвращает индекс в self._history_items для отображаемой строки таблицы."""
+        item = self.history_table.item(row, 0)
+        if item is None:
+            return -1
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(idx, int) and 0 <= idx < len(self._history_items):
+            return idx
+        return -1
+
+    def load_selected_history(self):
+        row = self.history_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "История",
+                "Выберите расчёт в таблице."
+            )
+            return
+        idx = self._get_item_index_at_row(row)
+        if idx < 0:
+            return
+        self._load_history_data(self._history_items[idx]['data'])
+
+    def load_history_item(self, row, col):
+        idx = self._get_item_index_at_row(row)
+        if idx < 0:
+            return
+        self._load_history_data(self._history_items[idx]['data'])
+
+    def delete_selected_history(self):
+        row = self.history_table.currentRow()
+        if row < 0:
+            QMessageBox.information(
+                self, "История",
+                "Выберите расчёт в таблице."
+            )
+            return
+        idx = self._get_item_index_at_row(row)
+        if idx < 0:
+            return
+        item = self._history_items[idx]
+        name = item['data'].get('name', 'без названия')
+
+        ans = QMessageBox.question(
+            self, "Подтверждение удаления",
+            f"Удалить расчёт «{name}»?\n\nЭто действие необратимо.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+
+        if HistoryManager.delete(item['path']):
+            self.refresh_history()
+            self.label_status.setText(f"🗑 Удалён расчёт: {name}")
+        else:
+            QMessageBox.warning(
+                self, "Ошибка",
+                "Не удалось удалить файл."
+            )
+
+    def open_history_folder(self):
+        path = str(HistoryManager.get_dir())
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Ошибка",
+                f"Не удалось открыть папку:\n{e}\n\nПуть: {path}"
+            )
 
     # ── Вспомогательные ──────────────────────────────────────────────────
 
@@ -2088,6 +2452,7 @@ class PrintingCalculator(QMainWindow):
         c = self.copies
         tpr = 0
 
+        # Стандартные форматы
         sb = []
         for fmt in FMT_ORDER:
             fw, fh = ISO_A[fmt]
@@ -2098,6 +2463,7 @@ class PrintingCalculator(QMainWindow):
                     sb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
                     tpr += q
 
+        # Расширенные (нестандартные ISO) форматы
         nb = []
         for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
             for kind in KIND_ORDER:
@@ -2107,6 +2473,7 @@ class PrintingCalculator(QMainWindow):
                     nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
                     tpr += q
 
+        # Произвольные форматы
         cb = []
         for k in self.grand:
             if k.startswith("Рулон") or k.startswith("_roll_fold_"):
@@ -2120,6 +2487,33 @@ class PrintingCalculator(QMainWindow):
                 cb.append(f"{fmt} {kind} — {q} стр.")
                 tpr += q
 
+        # Рулонные форматы (по детализации каждой группы)
+        rb_lines = []
+        seen = set()
+        for fd in self.file_details:
+            for rg in fd.get("roll_groups", []):
+                kind_str = "цвет" if rg.get("color") else "ч/б"
+                w = rg.get("w", 0)
+                h = rg.get("h", 0)
+                count = rg.get("count", 0)
+                if count <= 0:
+                    continue
+                q = count * c
+                tpr += q
+                rb_lines.append(f"{w:.0f}×{h:.0f} мм {kind_str} — {q} шт.")
+
+        # Объединяем одинаковые размеры/цветности
+        if rb_lines:
+            agg = defaultdict(int)
+            for line in rb_lines:
+                # парсим обратно: "WxH мм KIND — N шт."
+                m = re.match(r'(.+?) — (\d+) шт\.$', line)
+                if m:
+                    key = m.group(1)
+                    agg[key] += int(m.group(2))
+            rb_lines = [f"{k} — {v} шт." for k, v in agg.items()]
+
+        # Рулоны в метрах (для блока РУЛОННАЯ ПЕЧАТЬ внизу отчёта)
         rbr = self.grand.get("Рулон ч/б мм", 0) * c
         rcr = self.grand.get("Рулон цвет мм", 0) * c
         cms = "Ч/б (принудительно)" if self.force_bw else "По файлу"
@@ -2146,7 +2540,12 @@ class PrintingCalculator(QMainWindow):
                 lines.append("")
             lines.append("• Произвольные форматы:")
             lines.extend(f"  {l}" for l in cb)
-        if not (sb or nb or cb):
+        if rb_lines:
+            if sb or nb or cb:
+                lines.append("")
+            lines.append("• Нестандартные/рулонные форматы:")
+            lines.extend(f"  {l}" for l in rb_lines)
+        if not (sb or nb or cb or rb_lines):
             lines.append("Нет данных")
         lines.append(f"Итого страниц: {tpr}")
         lines.append("")
