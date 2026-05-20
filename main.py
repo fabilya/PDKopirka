@@ -6,6 +6,7 @@ import math
 import hmac
 import hashlib
 import random
+import re
 import tempfile
 import subprocess
 import urllib.request
@@ -25,22 +26,37 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 import json
 import shutil
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Пути к ресурсам
+# ─────────────────────────────────────────────────────────────────────────────
+
+def resource_path(relative_path):
+    """Путь к ресурсу, работает и в dev, и в PyInstaller (--onefile)."""
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 GITHUB_TOKEN = "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"
 
 
-def _parse_version(v: str):
-    v = v.lstrip("v").strip()
+def _parse_version(v):
+    if not v:
+        return (0, 0, 0)
+    v = str(v).lstrip("v").strip()
     try:
         return tuple(int(x) for x in v.split("."))
     except Exception:
@@ -57,9 +73,7 @@ def check_for_update():
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         latest_tag = data.get("tag_name", "")
-        latest_version = _parse_version(latest_tag)
-        current_version = _parse_version(APP_VERSION)
-        if latest_version <= current_version:
+        if _parse_version(latest_tag) <= _parse_version(APP_VERSION):
             return False, None, None
         download_url = None
         for asset in data.get("assets", []):
@@ -194,6 +208,10 @@ Set WshShell = Nothing
         sys.exit(1)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Диалог обновления
+# ─────────────────────────────────────────────────────────────────────────────
+
 class UpdateDialog(QDialog):
     def __init__(self, latest_version, download_url, parent=None):
         super().__init__(parent)
@@ -268,6 +286,99 @@ class UpdateDialog(QDialog):
         apply_update_and_restart(new_exe)
 
 
+CHANGELOG_HTML = """
+<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.1</h2>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    ✨ Новые возможности
+</h3>
+<ul>
+    <li>📐 <b>Справочник форматов</b> — добавлена выдвижная панель справа в окне нестандартного формата с полным списком всех поддерживаемых форматов (A4–A0 и их производные)</li>
+    <li>🎨 <b>Цветовая кодировка форматов</b> в справочнике:
+        <ul>
+            <li><span style="color:#2e7d32;">🟢 Зелёный</span> — печать <i>без резки</i></li>
+            <li><span style="color:#1565c0;">🔵 Синий</span> — требуется <i>резка</i></li>
+            <li><span style="color:#c62828;">🔴 Красный</span> — <i>нет возможности</i> распечатать</li>
+        </ul>
+    </li>
+    <li>✂️ <b>Новый блок «Резка»</b> во вкладке менеджера — автоматический подсчёт форматов, требующих резки (<code>A4x3</code>, <code>A4x5</code>–<code>A4x9</code>, <code>A3x3</code>–<code>A3x9</code>)</li>
+    <li>🌀 <b>Учёт рулонных страниц при фальцовке</b> — теперь рулонные форматы корректно попадают в расчёт фальцовки с указанием <b>реальных размеров</b></li>
+    <li>📄 <b>Детализированный вывод рулонных групп</b> в детализации по файлам с указанием размеров каждой страницы</li>
+    <li>🎉 <b>Окно «Что нового»</b> — после обновления показывается список изменений</li>
+    <li>🔗 <b>Ссылки на нижней панели</b> главной вкладки:
+        <ul>
+            <li>⭐ Оставить благодарность в Bitrix</li>
+            <li>🐛 Контакт для сообщений об ошибках</li>
+        </ul>
+    </li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🎨 Улучшения интерфейса
+</h3>
+<ul>
+    <li>🖼️ Добавлена <b>иконка приложения</b> в заголовке окна и на панели задач</li>
+    <li>📋 Tooltips при наведении на форматы в справочнике (всплывающие подсказки о возможности печати/резки)</li>
+    <li>🔧 Окно нестандартного формата теперь <i>шире и удобнее</i> для работы</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🐛 Исправления
+</h3>
+<ul>
+    <li>Исправлен расчёт фальцовки — рулонные форматы больше не теряются</li>
+    <li>Убрана секция «Резка» из общего текстового отчёта (теперь только во вкладке менеджера)</li>
+    <li>Улучшено распознавание цветных страниц с мелкими элементами (подписи, тонкие линии)</li>
+</ul>
+"""
+
+
+class WhatsNewDialog(QDialog):
+    def __init__(self, current_version, parent=None):
+        super().__init__(parent)
+        self.current_version = current_version
+        self.setWindowTitle("🎉 Что нового")
+        self.setMinimumSize(550, 450)
+        self.setModal(True)
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+        lay.setContentsMargins(25, 25, 25, 25)
+
+        title = QLabel(f"🎉 Версия {self.current_version}")
+        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("color: #0066cc;")
+        lay.addWidget(title)
+
+        self.te = QTextEdit()
+        self.te.setReadOnly(True)
+        self.te.setFont(QFont("Arial", 10))
+        self.te.setStyleSheet(
+            "QTextEdit { background: white; border: 1px solid #ddd; "
+            "border-radius: 6px; padding: 8px; }"
+        )
+        self.te.setHtml(CHANGELOG_HTML)
+        lay.addWidget(self.te)
+
+        btn = QPushButton("👍 Закрыть")
+        btn.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        btn.setMinimumHeight(40)
+        btn.setStyleSheet(
+            "QPushButton { background-color: #0066cc; color: white; "
+            "border: none; border-radius: 6px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #0052a3; }"
+        )
+        btn.clicked.connect(self.accept)
+        lay.addWidget(btn)
+
+        self.setStyleSheet("QDialog { background-color: #f5f6f7; }")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Константы форматов
 # ─────────────────────────────────────────────────────────────────────────────
 
 Image.MAX_IMAGE_PIXELS = None
@@ -301,6 +412,10 @@ CUTTING_FORMATS = {
     "A3x3", "A3x4", "A3x5", "A3x6", "A3x7", "A3x8", "A3x9",
 }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Лицензия
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _h(s):
     return hashlib.sha256(s.encode()).hexdigest()
@@ -355,15 +470,28 @@ def check_remote_license():
             token = resp.read().decode("utf-8").strip()
         valid, status = _verify_token(token)
         if not valid:
-            return False, f"Ошибка проверки лицензии.\n\nКод: {status}\n\nОбратитесь к администратору."
+            return False, (
+                f"Ошибка проверки лицензии.\n\nКод: {status}\n\n"
+                "Обратитесь к администратору."
+            )
         if status == "ACTIVE":
             return True, ""
-        return False, "Доступ к программе заблокирован администратором.\n\nОбратитесь к администратору."
+        return False, (
+            "Доступ к программе заблокирован администратором.\n\n"
+            "Обратитесь к администратору."
+        )
     except urllib.error.URLError:
-        return False, "Не удалось проверить лицензию.\n\nПроверьте подключение к интернету."
+        return False, (
+            "Не удалось проверить лицензию.\n\n"
+            "Проверьте подключение к интернету."
+        )
     except Exception as e:
         return False, f"Ошибка проверки лицензии:\n{e}"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Виджеты
+# ─────────────────────────────────────────────────────────────────────────────
 
 class NoScrollSpinBox(QSpinBox):
     def wheelEvent(self, event):
@@ -377,7 +505,9 @@ class LoginDialog(QDialog):
         self.setFixedSize(400, 280)
         self.setModal(True)
         self.authenticated = False
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
+        self.setWindowFlags(
+            self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint
+        )
         self._build_ui()
 
     def _build_ui(self):
@@ -395,9 +525,11 @@ class LoginDialog(QDialog):
         s.setStyleSheet("color: #666;")
         lay.addWidget(s)
         lay.addSpacing(10)
-        ist = ("QLineEdit { background-color: white; border: 2px solid #ccc; "
-               "border-radius: 6px; padding: 6px 12px; color: #333; } "
-               "QLineEdit:focus { border: 2px solid #0066cc; }")
+        ist = (
+            "QLineEdit { background-color: white; border: 2px solid #ccc; "
+            "border-radius: 6px; padding: 6px 12px; color: #333; } "
+            "QLineEdit:focus { border: 2px solid #0066cc; }"
+        )
         self.edit_login = QLineEdit()
         self.edit_login.setPlaceholderText("Логин")
         self.edit_login.setFont(QFont("Arial", 11))
@@ -419,17 +551,21 @@ class LoginDialog(QDialog):
         b = QPushButton("Войти")
         b.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         b.setMinimumHeight(40)
-        b.setStyleSheet("QPushButton { background-color: #0066cc; color: white; "
-                         "border: none; border-radius: 6px; font-weight: bold; } "
-                         "QPushButton:hover { background-color: #0052a3; }")
+        b.setStyleSheet(
+            "QPushButton { background-color: #0066cc; color: white; "
+            "border: none; border-radius: 6px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #0052a3; }"
+        )
         b.clicked.connect(self._try_login)
         lay.addWidget(b)
         be = QPushButton("Выход")
         be.setFont(QFont("Arial", 10))
         be.setMinimumHeight(32)
-        be.setStyleSheet("QPushButton { background-color: #999; color: white; "
-                          "border: none; border-radius: 6px; } "
-                          "QPushButton:hover { background-color: #777; }")
+        be.setStyleSheet(
+            "QPushButton { background-color: #999; color: white; "
+            "border: none; border-radius: 6px; } "
+            "QPushButton:hover { background-color: #777; }"
+        )
         be.clicked.connect(self._exit_app)
         lay.addWidget(be)
         self.setStyleSheet("QDialog { background-color: #f5f6f7; }")
@@ -479,20 +615,24 @@ class FormatHintPanel(QFrame):
         self._expanded = False
         self._panel_width = 520
         self._btn_width = 28
-        self.setStyleSheet("FormatHintPanel { background-color: #f9f9f9; "
-                           "border: 2px solid #0066cc; border-radius: 8px; }")
+        self.setStyleSheet(
+            "FormatHintPanel { background-color: #f9f9f9; "
+            "border: 2px solid #0066cc; border-radius: 8px; }"
+        )
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.btn_toggle = QPushButton("\n📐\nФ\nо\nр\nм\nа\nфвт\nы")
+        self.btn_toggle = QPushButton("\n📐\nФ\nо\nр\nм\nа\nт\nы")
         self.btn_toggle.setFixedWidth(self._btn_width)
-        self.btn_toggle.setSizePolicy(QSizePolicy.Policy.Fixed,
-                                      QSizePolicy.Policy.Expanding)
+        self.btn_toggle.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
+        )
         self.btn_toggle.setStyleSheet(
             "QPushButton { background-color: #0066cc; color: white; border: none; "
             "border-radius: 4px; font-size: 11px; font-weight: bold; padding: 4px 2px; } "
-            "QPushButton:hover { background-color: #0052a3; }")
+            "QPushButton:hover { background-color: #0052a3; }"
+        )
         self.btn_toggle.clicked.connect(self.toggle)
         root.addWidget(self.btn_toggle)
 
@@ -512,7 +652,8 @@ class FormatHintPanel(QFrame):
         legend = QLabel(
             '<span style="color:#2e7d32;">● Без резки</span> &nbsp;&nbsp; '
             '<span style="color:#1565c0;">● Нужна резка</span> &nbsp;&nbsp; '
-            '<span style="color:#c62828;">● Нет возможности печати</span>')
+            '<span style="color:#c62828;">● Нет возможности печати</span>'
+        )
         legend.setFont(QFont("Arial", 8))
         legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
         legend.setStyleSheet("background: transparent; border: none; padding: 2px;")
@@ -532,7 +673,9 @@ class FormatHintPanel(QFrame):
         self._fmt_label.setFont(QFont("Consolas", 9))
         self._fmt_label.setWordWrap(True)
         self._fmt_label.setTextFormat(Qt.TextFormat.RichText)
-        self._fmt_label.setStyleSheet("background: transparent; border: none; padding: 4px;")
+        self._fmt_label.setStyleSheet(
+            "background: transparent; border: none; padding: 4px;"
+        )
         self._fmt_label.setMouseTracking(True)
         self._fmt_label.installEventFilter(self)
         fl.addWidget(self._fmt_label)
@@ -554,16 +697,20 @@ class FormatHintPanel(QFrame):
         color, tip = self._get_format_color(name)
         s = f'<span style="color:{color};" title="{tip}">{name} — {size_str}</span>'
         if bracket_str:
-            s += (f' <span style="color:#2e7d32;font-weight:bold;" '
-                  f'title="Такой формат мы можем распечатать">({bracket_str})</span>')
+            s += (
+                f' <span style="color:#2e7d32;font-weight:bold;" '
+                f'title="Такой формат мы можем распечатать">({bracket_str})</span>'
+            )
         return s
 
     def _build_formats_html(self):
         lines = []
 
         def table_start():
-            lines.append('<table cellspacing="0" cellpadding="2" '
-                         'style="border:none;background:transparent;">')
+            lines.append(
+                '<table cellspacing="0" cellpadding="2" '
+                'style="border:none;background:transparent;">'
+            )
 
         def table_end():
             lines.append('</table>')
@@ -571,35 +718,43 @@ class FormatHintPanel(QFrame):
         def hr():
             lines.append('<hr style="border:1px solid #ccc;">')
 
-        a4 = [("A4", "210×297 мм"), ("A4x3", "297×630 мм"), ("A4x4", "297×840 мм"),
-              ("A4x5", "297×1050 мм"), ("A4x6", "297×1260 мм"), ("A4x7", "297×1470 мм"),
+        a4 = [("A4", "210×297 мм"), ("A4x3", "297×630 мм"),
+              ("A4x4", "297×840 мм"), ("A4x5", "297×1050 мм"),
+              ("A4x6", "297×1260 мм"), ("A4x7", "297×1470 мм"),
               ("A4x8", "297×1680 мм"), ("A4x9", "297×1890 мм")]
-        a3 = [("A3", "297×420 мм"), ("A3x3", "420×891 мм"), ("A3x4", "420×1188 мм"),
-              ("A3x5", "420×1485 мм"), ("A3x6", "420×1782 мм"), ("A3x7", "420×2079 мм"),
+        a3 = [("A3", "297×420 мм"), ("A3x3", "420×891 мм"),
+              ("A3x4", "420×1188 мм"), ("A3x5", "420×1485 мм"),
+              ("A3x6", "420×1782 мм"), ("A3x7", "420×2079 мм"),
               ("A3x8", "420×2376 мм"), ("A3x9", "420×2673 мм")]
 
         table_start()
         for i in range(max(len(a4), len(a3))):
             l = self._fmt_span(*a4[i]) if i < len(a4) else ""
             r = self._fmt_span(*a3[i]) if i < len(a3) else ""
-            lines.append(f'<tr><td style="padding-right:20px;border:none;">{l}</td>'
-                         f'<td style="border:none;">{r}</td></tr>')
+            lines.append(
+                f'<tr><td style="padding-right:20px;border:none;">{l}</td>'
+                f'<td style="border:none;">{r}</td></tr>'
+            )
         table_end()
         hr()
 
-        a2 = [("A2", "420×594 мм"), ("A2x3", "594×1260 мм"), ("A2x4", "594×1680 мм"),
-              ("A2x5", "594×2100 мм"), ("A2x6", "594×2520 мм"), ("A2x7", "594×2940 мм"),
+        a2 = [("A2", "420×594 мм"), ("A2x3", "594×1260 мм"),
+              ("A2x4", "594×1680 мм"), ("A2x5", "594×2100 мм"),
+              ("A2x6", "594×2520 мм"), ("A2x7", "594×2940 мм"),
               ("A2x8", "594×3360 мм"), ("A2x9", "594×3780 мм")]
-        a1 = [("A1", "594×841 мм"), ("A1x3", "841×1782 мм"), ("A1x4", "841×2376 мм"),
-              ("A1x5", "841×2970 мм"), ("A1x6", "841×3564 мм"), ("A1x7", "841×4158 мм"),
+        a1 = [("A1", "594×841 мм"), ("A1x3", "841×1782 мм"),
+              ("A1x4", "841×2376 мм"), ("A1x5", "841×2970 мм"),
+              ("A1x6", "841×3564 мм"), ("A1x7", "841×4158 мм"),
               ("A1x8", "841×4752 мм"), ("A1x9", "841×5346 мм")]
 
         table_start()
         for i in range(max(len(a2), len(a1))):
             l = self._fmt_span(*a2[i]) if i < len(a2) else ""
             r = self._fmt_span(*a1[i]) if i < len(a1) else ""
-            lines.append(f'<tr><td style="padding-right:20px;border:none;">{l}</td>'
-                         f'<td style="border:none;">{r}</td></tr>')
+            lines.append(
+                f'<tr><td style="padding-right:20px;border:none;">{l}</td>'
+                f'<td style="border:none;">{r}</td></tr>'
+            )
         table_end()
         hr()
 
@@ -616,7 +771,9 @@ class FormatHintPanel(QFrame):
         table_start()
         for name, size, bracket in a0:
             c = self._fmt_span(name, size, bracket)
-            lines.append(f'<tr><td colspan="2" style="border:none;">{c}</td></tr>')
+            lines.append(
+                f'<tr><td colspan="2" style="border:none;">{c}</td></tr>'
+            )
         table_end()
         return "\n".join(lines)
 
@@ -708,8 +865,10 @@ class UnknownFormatDialog(QDialog):
         br.clicked.connect(self._apply_roll)
         rr.addWidget(br)
         rl.addLayout(rr)
-        ba = QPushButton(f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × "
-                         f"{len(self.pages)} стр.)")
+        ba = QPushButton(
+            f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × "
+            f"{len(self.pages)} стр.)"
+        )
         ba.setFont(QFont("Arial", 10))
         ba.clicked.connect(self._apply_auto)
         rl.addWidget(ba)
@@ -750,7 +909,9 @@ class UnknownFormatDialog(QDialog):
                     os.remove(tmp_path)
                 except OSError:
                     tmp_path = os.path.join(
-                        tmp_dir, f"{base}__стр_{rng}_{datetime.now().strftime('%H%M%S')}.pdf")
+                        tmp_dir,
+                        f"{base}__стр_{rng}_{datetime.now().strftime('%H%M%S')}.pdf"
+                    )
             dst.save(tmp_path)
             dst.close()
             src.close()
@@ -858,13 +1019,17 @@ class AnalysisThread(QThread):
                           min_colored_pixels=30, min_colored_ratio=0.00005):
         try:
             scale = 200 / 72
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                  colorspace=fitz.csRGB, alpha=False)
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale),
+                colorspace=fitz.csRGB, alpha=False
+            )
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             a = np.asarray(img, dtype=np.uint8)
             if a.ndim != 3:
                 return False
-            r, g, b = a[..., 0].astype(np.int16), a[..., 1].astype(np.int16), a[..., 2].astype(np.int16)
+            r = a[..., 0].astype(np.int16)
+            g = a[..., 1].astype(np.int16)
+            b = a[..., 2].astype(np.int16)
             mx = np.maximum(np.maximum(r, g), b)
             mn = np.minimum(np.minimum(r, g), b)
             ink = mx < white_thr
@@ -915,8 +1080,10 @@ class AnalysisThread(QThread):
                                 break
                             pn = i + 1
                             r = p.mediabox
-                            w, h = sorted((round(r.width * 25.4 / 72, 1),
-                                           round(r.height * 25.4 / 72, 1)))
+                            w, h = sorted((
+                                round(r.width * 25.4 / 72, 1),
+                                round(r.height * 25.4 / 72, 1)
+                            ))
                             col = False if self.force_bw else self.detect_page_color(p)
                             fA = self.match_format_with_tolerance(w, h, ISO_A)
                             fN = self.match_format_with_tolerance(w, h, ISO_A_NONSTANDARD)
@@ -993,11 +1160,15 @@ class AnalysisThread(QThread):
                     continue
 
             if self._stop_requested:
-                self.finished.emit(dict(grand), total_source, file_page_counts, file_details)
+                self.finished.emit(
+                    dict(grand), total_source, file_page_counts, file_details
+                )
                 self.stopped.emit()
             else:
                 self.progress.emit(100)
-                self.finished.emit(dict(grand), total_source, file_page_counts, file_details)
+                self.finished.emit(
+                    dict(grand), total_source, file_page_counts, file_details
+                )
         except Exception as e:
             self.error.emit(f"Критическая ошибка: {e}")
 
@@ -1006,27 +1177,15 @@ class AnalysisThread(QThread):
 # Главное окно
 # ─────────────────────────────────────────────────────────────────────────────
 
-def resource_path(relative_path):
-    """Получает путь к ресурсу, работает и в dev, и в PyInstaller."""
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
-
-
 class PrintingCalculator(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Калькулятор расчёта проектной документации")
         self.setGeometry(100, 100, 1200, 700)
 
-        # ── Иконка окна ──────────────────────────────────────────────────
-        from PyQt6.QtGui import QIcon
         icon_path = resource_path("logo.ico")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        # ─────────────────────────────────────────────────────────────────
 
         self.primary_color = "#0066cc"
         self.danger_color = "#d33"
@@ -1049,31 +1208,37 @@ class PrintingCalculator(QMainWindow):
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{ background-color: {self.bg_color}; }}
             QTabWidget::pane {{ border: 1px solid #ddd; background-color: {self.bg_color}; }}
-            QTabBar::tab {{ background-color: #e8e8e8; padding: 8px 20px; margin-right: 2px;
-                border: 1px solid #ddd; color: #333; font-weight: bold; }}
+            QTabBar::tab {{ background-color: #e8e8e8; padding: 8px 20px;
+                margin-right: 2px; border: 1px solid #ddd; color: #333; font-weight: bold; }}
             QTabBar::tab:selected {{ background-color: {self.primary_color}; color: white; }}
-            QFrame {{ background-color: {self.card_color}; border-radius: 4px; border: 1px solid #e0e0e0; }}
+            QFrame {{ background-color: {self.card_color}; border-radius: 4px;
+                border: 1px solid #e0e0e0; }}
             QGroupBox {{ background-color: {self.card_color}; border: 1px solid #d0d0d0;
-                border-radius: 6px; margin-top: 8px; padding-top: 4px; font-weight: bold; color: #333; }}
-            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left; padding: 0 6px; }}
+                border-radius: 6px; margin-top: 8px; padding-top: 4px;
+                font-weight: bold; color: #333; }}
+            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left;
+                padding: 0 6px; }}
             QPushButton {{ background-color: {self.primary_color}; color: white; border: none;
                 padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 11px; }}
             QPushButton:hover {{ background-color: #0052a3; }}
             QPushButton:pressed {{ background-color: #003d7a; }}
             QPushButton:disabled {{ background-color: #bbb; color: #eee; }}
             QLabel {{ color: #333; }}
-            QLineEdit {{ background-color: white; border: 1px solid #ccc; border-radius: 4px;
-                padding: 4px 6px; color: #333; }}
-            QTextEdit {{ background-color: {self.card_color}; border: 1px solid #e0e0e0; border-radius: 4px; }}
+            QLineEdit {{ background-color: white; border: 1px solid #ccc;
+                border-radius: 4px; padding: 4px 6px; color: #333; }}
+            QTextEdit {{ background-color: {self.card_color}; border: 1px solid #e0e0e0;
+                border-radius: 4px; }}
             QSpinBox {{ background-color: {self.card_color}; color: #333; }}
             QRadioButton {{ background-color: {self.card_color}; color: #333;
                 padding: 4px 12px; font-weight: normal; }}
             QRadioButton::indicator {{ width: 16px; height: 16px; }}
-            QRadioButton::indicator:unchecked {{ background-color: white; border: 2px solid #ccc; border-radius: 9px; }}
+            QRadioButton::indicator:unchecked {{ background-color: white;
+                border: 2px solid #ccc; border-radius: 9px; }}
             QRadioButton::indicator:checked {{ background-color: {self.primary_color};
                 border: 2px solid {self.primary_color}; border-radius: 9px; }}
             QRadioButton:disabled {{ color: #aaa; }}
-            QRadioButton::indicator:disabled {{ background-color: #eee; border: 2px solid #ddd; }}
+            QRadioButton::indicator:disabled {{ background-color: #eee;
+                border: 2px solid #ddd; }}
         """)
 
     def init_ui(self):
@@ -1088,6 +1253,15 @@ class PrintingCalculator(QMainWindow):
         self.tabs.addTab(self.create_manager_tab(), "👔 Для менеджера (CRM)")
         self.tabs.addTab(self.create_report_tab(),  "📄 Для клиента")
         ml.addWidget(self.tabs)
+
+    def _bold_label(self, text, size=11):
+        lb = QLabel(text)
+        lb.setFont(QFont("Arial", size, QFont.Weight.Bold))
+        return lb
+
+    def show_whats_new(self):
+        dlg = WhatsNewDialog(APP_VERSION, parent=self)
+        dlg.exec()
 
     # ── Вкладка ВВОД ─────────────────────────────────────────────────────
 
@@ -1124,7 +1298,10 @@ class PrintingCalculator(QMainWindow):
         cr.addWidget(self.rb_color_bw)
         cr.addStretch()
         cl.addLayout(cr)
-        h = QLabel("«По файлу» — анализ цвета каждой страницы.  «Ч/б» — всё считается чёрно-белым.")
+        h = QLabel(
+            "«По файлу» — анализ цвета каждой страницы.  "
+            "«Ч/б» — всё считается чёрно-белым."
+        )
         h.setStyleSheet("color: #666; font-size: 10px;")
         h.setWordWrap(True)
         cl.addWidget(h)
@@ -1185,7 +1362,8 @@ class PrintingCalculator(QMainWindow):
         self.progress_bar.setStyleSheet(
             f"QProgressBar {{ border: 1px solid #ddd; border-radius: 4px; "
             f"text-align: center; height: 25px; }} "
-            f"QProgressBar::chunk {{ background-color: {self.primary_color}; }}")
+            f"QProgressBar::chunk {{ background-color: {self.primary_color}; }}"
+        )
         pgl.addWidget(self.progress_bar)
         lay.addWidget(pgf)
 
@@ -1202,7 +1380,8 @@ class PrintingCalculator(QMainWindow):
             f"QPushButton {{ background-color: {self.danger_color}; color: white; "
             f"border: none; padding: 8px 16px; border-radius: 4px; font-weight: bold; }} "
             f"QPushButton:hover {{ background-color: #a00; }} "
-            f"QPushButton:disabled {{ background-color: #ddd; color: #999; }}")
+            f"QPushButton:disabled {{ background-color: #ddd; color: #999; }}"
+        )
         self.btn_stop.clicked.connect(self.stop_analysis)
         self.btn_stop.setEnabled(False)
         brow.addWidget(self.btn_stop, stretch=1)
@@ -1213,6 +1392,7 @@ class PrintingCalculator(QMainWindow):
         # ── Ссылки внизу ─────────────────────────────────────────────────
         links_layout = QHBoxLayout()
         links_layout.setContentsMargins(0, 5, 0, 0)
+        links_layout.setSpacing(10)
 
         lbl_thx = QLabel(
             '⭐ <a href="https://kopirkaru.bitrix24.ru/company/personal/user/423876/" '
@@ -1226,20 +1406,33 @@ class PrintingCalculator(QMainWindow):
 
         links_layout.addStretch()
 
+        btn_whats_new = QPushButton(f"🎉 Что нового (v{APP_VERSION})")
+        btn_whats_new.setFont(QFont("Arial", 9))
+        btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_whats_new.setStyleSheet(
+            "QPushButton { background-color: transparent; color: #0066cc; "
+            "border: 1px solid #0066cc; border-radius: 4px; "
+            "padding: 4px 10px; font-weight: normal; } "
+            "QPushButton:hover { background-color: #0066cc; color: white; }"
+        )
+        btn_whats_new.clicked.connect(self.show_whats_new)
+        links_layout.addWidget(btn_whats_new)
+
+        links_layout.addStretch()
+
         lbl_bug = QLabel('🐛 Сообщить об ошибке: ilya.fabiyanskiy@yandex.ru')
         lbl_bug.setFont(QFont("Arial", 9))
-        lbl_bug.setStyleSheet("background: transparent; border: none; color: #666;")
-        lbl_bug.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lbl_bug.setStyleSheet(
+            "background: transparent; border: none; color: #666;"
+        )
+        lbl_bug.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         links_layout.addWidget(lbl_bug)
 
         lay.addLayout(links_layout)
 
         return w
-
-    def _bold_label(self, text, size=11):
-        lb = QLabel(text)
-        lb.setFont(QFont("Arial", size, QFont.Weight.Bold))
-        return lb
 
     def on_binding_changed(self):
         if self.rb_binding_a4.isChecked():
@@ -1262,7 +1455,9 @@ class PrintingCalculator(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(20, 20, 20, 20)
         lay.setSpacing(10)
-        lay.addWidget(self._bold_label("📊 Детализация по файлам (1 экз., с номерами страниц):"))
+        lay.addWidget(self._bold_label(
+            "📊 Детализация по файлам (1 экз., с номерами страниц):"
+        ))
         self.text_details = QTextEdit()
         self.text_details.setReadOnly(True)
         self.text_details.setFont(QFont("Consolas", 9))
@@ -1291,14 +1486,18 @@ class PrintingCalculator(QMainWindow):
             te.setReadOnly(True)
             te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            te.setSizePolicy(te.sizePolicy().horizontalPolicy(),
-                             QSizePolicy.Policy.Fixed)
+            te.setSizePolicy(
+                te.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
+            )
             te.setMinimumHeight(minh)
             fl_.addWidget(te)
             setattr(self, attr, te)
             return frame
 
-        sl.addWidget(make_block("🖨️ Печать (с конвертацией, с учётом экземпляров):", "text_printing", 120))
+        sl.addWidget(make_block(
+            "🖨️ Печать (с конвертацией, с учётом экземпляров):",
+            "text_printing", 120
+        ))
         sl.addWidget(make_block("🌀 Рулонная печать:", "text_roll", 80))
         sl.addWidget(make_block("✂️ Резка:", "text_cutting", 80))
         sl.addWidget(make_block("📋 Фальцовка:", "text_folding", 120))
@@ -1360,8 +1559,11 @@ class PrintingCalculator(QMainWindow):
         if self.selected_path.lower().endswith(".pdf"):
             pdfs = [self.selected_path]
         else:
-            pdfs = [os.path.join(r, f) for r, _, fs in os.walk(self.selected_path)
-                    for f in fs if f.lower().endswith(".pdf")]
+            pdfs = [
+                os.path.join(r, f)
+                for r, _, fs in os.walk(self.selected_path)
+                for f in fs if f.lower().endswith(".pdf")
+            ]
         if not pdfs:
             self.label_status.setText("❌ PDF файлы не найдены")
             return
@@ -1620,14 +1822,19 @@ class PrintingCalculator(QMainWindow):
             for rg in fd.get("roll_groups", []):
                 kind_str = "цвет" if rg["color"] else "ч/б"
                 rng = compact_page_list(rg["pages"])
-                line = f"    Рулон {kind_str} ({rg['w']:.0f}×{rg['h']:.0f} мм) — {rg['count']} стр."
+                line = (
+                    f"    Рулон {kind_str} ({rg['w']:.0f}×{rg['h']:.0f} мм) "
+                    f"— {rg['count']} стр."
+                )
                 if rng:
                     line += f" ({rng})"
                 lines.append(line)
 
             if not fd.get("roll_groups"):
-                for label, pk, mk in [("Рулон ч/б", "roll_bw_pages", "roll_bw"),
-                                       ("Рулон цвет", "roll_color_pages", "roll_color")]:
+                for label, pk, mk in [
+                    ("Рулон ч/б", "roll_bw_pages", "roll_bw"),
+                    ("Рулон цвет", "roll_color_pages", "roll_color")
+                ]:
                     rp = fd.get(pk, [])
                     rm = fd.get(mk, 0)
                     if rp or rm > 0:
@@ -1655,10 +1862,14 @@ class PrintingCalculator(QMainWindow):
                     continue
                 line = f"{fmt} {kind} ({fw}×{fh} мм) — {t} стр."
                 if di.get((fmt, kind)):
-                    parts = [f"из {s}: {sq}→{a}" for s, sq, a in di[(fmt, kind)]]
+                    parts = [
+                        f"из {s}: {sq}→{a}" for s, sq, a in di[(fmt, kind)]
+                    ]
                     line += "  [" + ", ".join(parts) + "]"
                 pl.append(line); tpp += t
-        self.text_printing.setText("\n".join(pl) if pl else "Нет данных для печати")
+        self.text_printing.setText(
+            "\n".join(pl) if pl else "Нет данных для печати"
+        )
 
         # Рулон
         rl = []
@@ -1668,9 +1879,11 @@ class PrintingCalculator(QMainWindow):
             rl.append(f"Ч/б — {rbt:.0f} мм ({rbt / 1000:.2f} м)")
         if rct > 0:
             rl.append(f"Цвет — {rct:.0f} мм ({rct / 1000:.2f} м)")
-        self.text_roll.setText("\n".join(rl) if rl else "Рулонная печать не требуется")
+        self.text_roll.setText(
+            "\n".join(rl) if rl else "Рулонная печать не требуется"
+        )
 
-        # Резка (только для менеджера)
+        # Резка
         cut_lines, cut_total = self._calc_cutting()
         if cut_lines:
             cp = ["Форматы, требующие резки:", ""]
@@ -1700,7 +1913,9 @@ class PrintingCalculator(QMainWindow):
                     ftp.append("")
                 ftp.append("Нестандартные/рулонные форматы:")
                 ftp.extend(nlr)
-        self.text_folding.setText("\n".join(ftp) if ftp else "Фальцовка не требуется")
+        self.text_folding.setText(
+            "\n".join(ftp) if ftp else "Фальцовка не требуется"
+        )
 
         # Брошюровка
         blines, tb, bt = [], 0, None
@@ -1717,7 +1932,9 @@ class PrintingCalculator(QMainWindow):
 
         # Вес
         tw = self._calc_weight(st, rbt, rct, bt, tb)
-        self.label_total.setText(f"⚖️ Вес: {self._fw(tw) if tw > 0 else '0.00 кг'}")
+        self.label_total.setText(
+            f"⚖️ Вес: {self._fw(tw) if tw > 0 else '0.00 кг'}"
+        )
 
         QTimer.singleShot(0, lambda: self._autosize(self.text_printing, 120))
         QTimer.singleShot(0, lambda: self._autosize(self.text_roll, 80))
@@ -1728,7 +1945,6 @@ class PrintingCalculator(QMainWindow):
         self._build_report(ft, slr, nlr, tf, bt, blines, tb, tw)
 
     def _build_report(self, ft, fs, fn, tf, bt, bl, tb, tw):
-        """Строит текстовый отчёт (вкладка 📄 3). Резка сюда НЕ включается."""
         c = self.copies
         tpr = 0
 
@@ -1840,7 +2056,9 @@ class PrintingCalculator(QMainWindow):
             pyperclip.copy(txt)
         except Exception:
             try:
-                p = subprocess.Popen(['clip'], stdin=subprocess.PIPE, shell=True)
+                p = subprocess.Popen(
+                    ['clip'], stdin=subprocess.PIPE, shell=True
+                )
                 p.communicate(txt.encode('utf-8'))
             except Exception:
                 pass
@@ -1860,18 +2078,17 @@ class PrintingCalculator(QMainWindow):
 def main():
     app = QApplication(sys.argv)
 
-    # ── Иконка приложения ────────────────────────────────────────────────
-    from PyQt6.QtGui import QIcon
     icon_path = resource_path("logo.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
-    # ─────────────────────────────────────────────────────────────────────
 
+    # 1. Лицензия
     ok, msg = check_remote_license()
     if not ok:
         QMessageBox.critical(None, "Доступ запрещён", msg)
         sys.exit(1)
 
+    # 2. Обновление (только в frozen режиме)
     if getattr(sys, "frozen", False):
         try:
             has_update, latest_ver, dl_url = check_for_update()
@@ -1879,14 +2096,18 @@ def main():
                 UpdateDialog(latest_ver, dl_url).exec()
         except Exception as e:
             print(f"[UPDATE] Ошибка: {e}")
-            QMessageBox.warning(None, "Обновление",
-                                "Не удалось проверить обновления.\n"
-                                "Программа продолжит работу со старой версией.")
+            QMessageBox.warning(
+                None, "Обновление",
+                "Не удалось проверить обновления.\n"
+                "Программа продолжит работу со старой версией."
+            )
 
+    # 3. Авторизация
     dlg = LoginDialog()
     if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.authenticated:
         sys.exit(0)
 
+    # 4. Главное окно
     window = PrintingCalculator()
     window.show()
     sys.exit(app.exec())
