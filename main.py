@@ -56,7 +56,7 @@ def resource_path(relative_path):
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 GITHUB_TOKEN = "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"
