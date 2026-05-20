@@ -7,6 +7,7 @@ import hmac
 import hashlib
 import random
 import re
+import ssl
 import tempfile
 import subprocess
 import urllib.request
@@ -29,6 +30,13 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QFont, QIcon
 import json
 import shutil
+
+try:
+    import certifi
+    _HAS_CERTIFI = True
+except ImportError:
+    _HAS_CERTIFI = False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Пути к ресурсам
@@ -53,6 +61,77 @@ UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 GITHUB_TOKEN = "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"
 
 
+def _get_log_path():
+    return ""
+
+
+def _write_log(msg):
+        pass
+
+
+def _make_ssl_context_certifi():
+    """SSL-контекст с сертификатами из certifi."""
+    if not _HAS_CERTIFI:
+        return None
+    try:
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception as e:
+        _write_log(f"Ошибка создания SSL контекста (certifi): {e}")
+        return None
+
+
+def _urlopen_safe(req, timeout=15):
+    """
+    urlopen с несколькими попытками для обхода SSL проблем
+    на корпоративных компьютерах с антивирусами/прокси.
+    """
+    last_error = None
+
+    # Попытка 1: certifi
+    ctx = _make_ssl_context_certifi()
+    if ctx is not None:
+        try:
+            _write_log("SSL: попытка с сертификатами certifi")
+            return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+        except ssl.SSLError as e:
+            last_error = e
+            _write_log(f"SSL ошибка (certifi): {e}")
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, ssl.SSLError):
+                last_error = e
+                _write_log(f"URL/SSL ошибка (certifi): {e.reason}")
+            else:
+                raise
+
+    # Попытка 2: системный default
+    try:
+        _write_log("SSL: попытка с системными сертификатами")
+        ctx = ssl.create_default_context()
+        return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    except ssl.SSLError as e:
+        last_error = e
+        _write_log(f"SSL ошибка (системные): {e}")
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ssl.SSLError):
+            last_error = e
+            _write_log(f"URL/SSL ошибка (системные): {e.reason}")
+        else:
+            raise
+
+    # Попытка 3: без проверки SSL (для корп. сетей с MITM-антивирусом)
+    try:
+        _write_log("SSL: попытка БЕЗ проверки сертификата (небезопасно)")
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    except Exception as e:
+        _write_log(f"SSL ошибка (без проверки): {e}")
+        if last_error:
+            raise last_error
+        raise
+
+
 def _parse_version(v):
     if not v:
         return (0, 0, 0)
@@ -64,33 +143,76 @@ def _parse_version(v):
 
 
 def check_for_update():
+    """
+    Возвращает (has_update, latest_ver, dl_url, error_msg).
+    error_msg = None, если ошибок не было.
+    """
+    _write_log(f"Проверка обновления. Текущая версия: {APP_VERSION}")
+    _write_log(f"URL: {UPDATE_API_URL}")
+    _write_log(f"certifi доступен: {_HAS_CERTIFI}")
+
     try:
         req = urllib.request.Request(UPDATE_API_URL)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
         req.add_header("Accept", "application/vnd.github.v3+json")
         if GITHUB_TOKEN:
             req.add_header("Authorization", f"token {GITHUB_TOKEN}")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+
+        with _urlopen_safe(req, timeout=15) as resp:
+            _write_log(f"Ответ GitHub: HTTP {resp.status}")
             data = json.loads(resp.read().decode("utf-8"))
+
         latest_tag = data.get("tag_name", "")
+        _write_log(f"Последний релиз: {latest_tag}")
+
+        if not latest_tag:
+            msg = "GitHub вернул пустой tag_name."
+            _write_log(f"ОШИБКА: {msg}")
+            return False, None, None, msg
+
         if _parse_version(latest_tag) <= _parse_version(APP_VERSION):
-            return False, None, None
+            _write_log(f"Обновление не требуется: {latest_tag} <= {APP_VERSION}")
+            return False, None, None, None
+
+        _write_log(f"Найдено обновление: {APP_VERSION} → {latest_tag}")
+
+        assets = data.get("assets", [])
+        _write_log(f"Assets: {[a['name'] for a in assets]}")
+
         download_url = None
-        for asset in data.get("assets", []):
+        for asset in assets:
             if asset["name"].lower().endswith(".exe"):
-                download_url = asset["browser_download_url"]
                 if GITHUB_TOKEN:
                     download_url = asset["url"]
+                else:
+                    download_url = asset["browser_download_url"]
                 break
+
         if not download_url:
-            return False, None, None
-        return True, latest_tag, download_url
+            msg = f"В релизе {latest_tag} не найден .exe файл."
+            _write_log(f"ОШИБКА: {msg}")
+            return False, None, None, msg
+
+        return True, latest_tag, download_url, None
+
+    except urllib.error.HTTPError as e:
+        msg = f"HTTP ошибка: {e.code} {e.reason}"
+        _write_log(f"ОШИБКА: {msg}")
+        return False, None, None, msg
+
+    except urllib.error.URLError as e:
+        msg = f"Нет доступа к GitHub: {e.reason}"
+        _write_log(f"ОШИБКА: {msg}")
+        return False, None, None, msg
+
     except Exception as e:
-        print(f"[UPDATE] Ошибка проверки: {e}")
-        return False, None, None
+        msg = f"{type(e).__name__}: {e}"
+        _write_log(f"ОШИБКА: {msg}")
+        return False, None, None, msg
 
 
 def download_update(url, target_path, progress_callback=None):
+    _write_log(f"Начало загрузки: {url}")
     try:
         for old in [target_path, target_path + ".part"]:
             if os.path.exists(old):
@@ -98,13 +220,16 @@ def download_update(url, target_path, progress_callback=None):
                     os.remove(old)
                 except OSError:
                     pass
+
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
         if GITHUB_TOKEN:
             req.add_header("Authorization", f"token {GITHUB_TOKEN}")
             req.add_header("Accept", "application/octet-stream")
-        with urllib.request.urlopen(req, timeout=120) as resp:
+
+        with _urlopen_safe(req, timeout=120) as resp:
             total_size = int(resp.headers.get("Content-Length", 0))
+            _write_log(f"Размер: {total_size} байт")
             downloaded = 0
             chunk_size = 64 * 1024
             temp_path = target_path + ".part"
@@ -120,38 +245,48 @@ def download_update(url, target_path, progress_callback=None):
                             progress_callback(downloaded, total_size)
                         except Exception:
                             pass
+
         if total_size > 0 and downloaded != total_size:
+            _write_log(f"ОШИБКА: загружено {downloaded} из {total_size}")
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
             return False
+
         if os.path.getsize(temp_path) < 1024 * 100:
+            _write_log("ОШИБКА: файл слишком маленький")
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
             return False
+
         with open(temp_path, "rb") as f:
             magic = f.read(2)
         if magic != b"MZ":
+            _write_log(f"ОШИБКА: не .exe (magic: {magic.hex()})")
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
             return False
+
         if os.path.exists(target_path):
             os.remove(target_path)
         os.rename(temp_path, target_path)
+        _write_log(f"Файл сохранён: {target_path}")
         return True
+
     except Exception as e:
-        print(f"[UPDATE] Ошибка: {e}")
+        _write_log(f"ОШИБКА загрузки: {type(e).__name__}: {e}")
         return False
 
 
 def apply_update_and_restart(new_exe_path):
     if not getattr(sys, "frozen", False):
         return
+    _write_log("Запуск процедуры обновления...")
     current_exe = sys.executable
     current_pid = os.getpid()
     tmp_dir = tempfile.gettempdir()
@@ -183,6 +318,7 @@ if errorlevel 1 (
         exit /b 1
     )
 )
+start "" "{current_exe}"
 del "{vbs_path}" >nul 2>&1
 (goto) 2>nul & del "%~f0"
 """
@@ -204,7 +340,7 @@ Set WshShell = Nothing
         QApplication.quit()
         sys.exit(0)
     except Exception as e:
-        print(f"[UPDATE] Ошибка подготовки обновления: {e}")
+        _write_log(f"ОШИБКА запуска обновления: {e}")
         sys.exit(1)
 
 
@@ -285,6 +421,10 @@ class UpdateDialog(QDialog):
         QApplication.processEvents()
         apply_update_and_restart(new_exe)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Диалог «Что нового» — текст задаётся прямо в коде
+# ─────────────────────────────────────────────────────────────────────────────
 
 CHANGELOG_HTML = """
 <h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.1</h2>
@@ -466,7 +606,7 @@ def check_remote_license():
         req.add_header("User-Agent", "PrintCalc/1.0")
         req.add_header("Cache-Control", "no-cache, no-store, must-revalidate")
         req.add_header("Pragma", "no-cache")
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _urlopen_safe(req, timeout=15) as resp:
             token = resp.read().decode("utf-8").strip()
         valid, status = _verify_token(token)
         if not valid:
@@ -623,7 +763,7 @@ class FormatHintPanel(QFrame):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.btn_toggle = QPushButton("\n📐\nФ\nо\nр\nм\nа\nт\nы")
+        self.btn_toggle = QPushButton("◀\n📐\nФ\nо\nр\nм\nа\nт\nы")
         self.btn_toggle.setFixedWidth(self._btn_width)
         self.btn_toggle.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
@@ -1273,7 +1413,7 @@ class PrintingCalculator(QMainWindow):
 
         ff = QFrame()
         fl = QVBoxLayout(ff)
-        fl.addWidget(self._bold_label("📁 Выберите PDF файл или папку:"))
+        fl.addWidget(self._bold_label("📁 Выберите папку:"))
         row = QHBoxLayout()
         self.label_path = QLabel("Путь не выбран")
         self.label_path.setStyleSheet("color: #666; padding: 5px;")
@@ -2088,19 +2228,20 @@ def main():
         QMessageBox.critical(None, "Доступ запрещён", msg)
         sys.exit(1)
 
-    # 2. Обновление (только в frozen режиме)
+    # 2. Обновление (только в frozen / exe режиме)
     if getattr(sys, "frozen", False):
-        try:
-            has_update, latest_ver, dl_url = check_for_update()
-            if has_update:
-                UpdateDialog(latest_ver, dl_url).exec()
-        except Exception as e:
-            print(f"[UPDATE] Ошибка: {e}")
+        has_update, latest_ver, dl_url, upd_err = check_for_update()
+
+        if upd_err:
             QMessageBox.warning(
-                None, "Обновление",
-                "Не удалось проверить обновления.\n"
-                "Программа продолжит работу со старой версией."
+                None,
+                "Проверка обновлений",
+                f"Не удалось проверить наличие обновлений.\n\n"
+                f"Причина:\n{upd_err}\n\n"
+                f"Программа продолжит работу с версией {APP_VERSION}."
             )
+        elif has_update:
+            UpdateDialog(latest_ver, dl_url).exec()
 
     # 3. Авторизация
     dlg = LoginDialog()
