@@ -56,7 +56,7 @@ def resource_path(relative_path):
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 GITHUB_TOKEN = "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"
@@ -446,6 +446,23 @@ CHANGELOG_HTML = """
     <li>🔐 Надёжное автообновление на корпоративных компьютерах с антивирусами/прокси</li>
     <li>🚨 Понятные сообщения при проблемах с обновлением или сетью</li>
 </ul>
+<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.3</h2>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    ✨ Новые возможности
+</h3>
+<ul>
+    <li>💾 Добавлена кнопка <b>«Сохранить в TXT»</b> во вкладке <b>«Детализация файлов»</b></li>
+    <li>📄 Теперь весь текст детализации можно сохранить в <b>.txt</b> файл одним нажатием</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🔧 Улучшения
+</h3>
+<ul>
+    <li>✂️ В отображении номеров страниц убраны пробелы после запятых — список стал компактнее</li>
+    <li>📚 Обновлено оформление вывода в детализации файлов и связанных окнах</li>
+</ul>
 """
 
 
@@ -791,7 +808,7 @@ def compact_page_list(pages):
             ranges.append(str(start) if start == end else f"{start}-{end}")
             start = end = p
     ranges.append(str(start) if start == end else f"{start}-{end}")
-    return ", ".join(ranges)
+    return ",".join(ranges)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1395,6 +1412,43 @@ class PrintingCalculator(QMainWindow):
         self.init_ui()
         QTimer.singleShot(100, self.refresh_history)
 
+    def save_details_txt(self):
+        text = self.text_details.toPlainText().strip()
+
+        if not text:
+            QMessageBox.information(
+                self,
+                "Сохранение",
+                "Нет данных для сохранения.\nСначала выполните анализ."
+            )
+            return
+
+        default_name = f"detalizaciya_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить детализацию в TXT",
+            default_name,
+            "Текстовые файлы (*.txt);;Все файлы (*)"
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".txt"):
+            file_path += ".txt"
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.label_status.setText(f"✅ Детализация сохранена: {file_path}")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка сохранения",
+                f"Не удалось сохранить файл:\n{e}"
+            )
+
     def apply_style(self):
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{ background-color: {self.bg_color}; }}
@@ -1651,13 +1705,21 @@ class PrintingCalculator(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(20, 20, 20, 20)
         lay.setSpacing(10)
+
         lay.addWidget(self._bold_label(
             "📊 Детализация по файлам (1 экз., с номерами страниц):"
         ))
+
         self.text_details = QTextEdit()
         self.text_details.setReadOnly(True)
         self.text_details.setFont(QFont("Consolas", 9))
         lay.addWidget(self.text_details)
+
+        btn_save_details = QPushButton("💾 Сохранить в TXT (Для производства)")
+        btn_save_details.setMinimumHeight(40)
+        btn_save_details.clicked.connect(self.save_details_txt)
+        lay.addWidget(btn_save_details)
+
         return w
 
     # ── Вкладка менеджера ────────────────────────────────────────────────
