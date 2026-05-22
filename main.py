@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QRadioButton, QButtonGroup, QSizePolicy, QHeaderView
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 import json
 import shutil
 
@@ -40,13 +40,50 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Принудительная светлая палитра (защита от тёмной темы Windows)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def force_light_palette(app):
+    """Устанавливает стиль Fusion и светлую палитру для стабильного
+    отображения на Windows 10/11 вне зависимости от системной темы."""
+    app.setStyle("Fusion")
+
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window,          QColor("#f5f6f7"))
+    pal.setColor(QPalette.ColorRole.WindowText,      QColor("#333333"))
+    pal.setColor(QPalette.ColorRole.Base,             QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.AlternateBase,    QColor("#f8f9fa"))
+    pal.setColor(QPalette.ColorRole.Text,             QColor("#333333"))
+    pal.setColor(QPalette.ColorRole.Button,           QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.ButtonText,       QColor("#333333"))
+    pal.setColor(QPalette.ColorRole.ToolTipBase,      QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.ToolTipText,      QColor("#333333"))
+    pal.setColor(QPalette.ColorRole.PlaceholderText,  QColor("#999999"))
+    pal.setColor(QPalette.ColorRole.Highlight,        QColor("#0066cc"))
+    pal.setColor(QPalette.ColorRole.HighlightedText,  QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.BrightText,       QColor("#333333"))
+    pal.setColor(QPalette.ColorRole.Link,             QColor("#0066cc"))
+    pal.setColor(QPalette.ColorRole.LinkVisited,      QColor("#0052a3"))
+
+    # Disabled-состояние
+    pal.setColor(QPalette.ColorGroup.Disabled,
+                 QPalette.ColorRole.WindowText, QColor("#aaaaaa"))
+    pal.setColor(QPalette.ColorGroup.Disabled,
+                 QPalette.ColorRole.Text, QColor("#aaaaaa"))
+    pal.setColor(QPalette.ColorGroup.Disabled,
+                 QPalette.ColorRole.ButtonText, QColor("#aaaaaa"))
+
+    app.setPalette(pal)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Пути к ресурсам
 # ─────────────────────────────────────────────────────────────────────────────
 
 def resource_path(relative_path):
-    """Путь к ресурсу, работает и в dev, и в PyInstaller (--onefile)."""
+    """Путь к ресурсу, работает и в dev, и в PyInstaller / Nuitka."""
     if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
     else:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
@@ -56,19 +93,10 @@ def resource_path(relative_path):
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 GITHUB_TOKEN = "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"
-
-
-def _get_log_path():
-    return ""
-
-
-def _write_log(msg):
-    """Логирование отключено."""
-    pass
 
 
 def _make_ssl_context_certifi():
@@ -81,13 +109,8 @@ def _make_ssl_context_certifi():
 
 
 def _urlopen_safe(req, timeout=15):
-    """
-    urlopen с несколькими попытками для обхода SSL проблем
-    на корпоративных компьютерах с антивирусами/прокси.
-    """
     last_error = None
 
-    # Попытка 1: certifi
     ctx = _make_ssl_context_certifi()
     if ctx is not None:
         try:
@@ -100,7 +123,6 @@ def _urlopen_safe(req, timeout=15):
             else:
                 raise
 
-    # Попытка 2: системный default
     try:
         ctx = ssl.create_default_context()
         return urllib.request.urlopen(req, timeout=timeout, context=ctx)
@@ -112,7 +134,6 @@ def _urlopen_safe(req, timeout=15):
         else:
             raise
 
-    # Попытка 3: без проверки SSL
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -135,7 +156,6 @@ def _parse_version(v):
 
 
 def check_for_update():
-    """Возвращает (has_update, latest_ver, dl_url, error_msg)."""
     try:
         req = urllib.request.Request(UPDATE_API_URL)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
@@ -241,56 +261,247 @@ def download_update(url, target_path, progress_callback=None):
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Надёжное применение обновления
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _write_updater_script(script_path, new_exe, current_exe, current_pid):
+    new_exe_e = new_exe.replace("\\", "\\\\")
+    current_exe_e = current_exe.replace("\\", "\\\\")
+
+    script = f'''# -*- coding: utf-8 -*-
+import os, sys, time, subprocess, shutil
+
+NEW_EXE     = r"{new_exe_e}"
+TARGET_EXE  = r"{current_exe_e}"
+OLD_PID     = {current_pid}
+
+def wait_process_exit(pid, timeout=30):
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        return True
+    result = ctypes.windll.kernel32.WaitForSingleObject(handle, timeout * 1000)
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return result != 0x00000102
+
+def replace_file(src, dst, retries=30, delay=1.0):
+    for i in range(retries):
+        try:
+            if os.path.exists(dst + ".old"):
+                try: os.remove(dst + ".old")
+                except OSError: pass
+            if os.path.exists(dst):
+                os.rename(dst, dst + ".old")
+            shutil.copy2(src, dst)
+            try: os.remove(dst + ".old")
+            except OSError: pass
+            try: os.remove(src)
+            except OSError: pass
+            return True
+        except Exception:
+            time.sleep(delay)
+    return False
+
+def main():
+    wait_process_exit(OLD_PID, timeout=30)
+    time.sleep(1.5)
+    ok = replace_file(NEW_EXE, TARGET_EXE)
+    if not ok:
+        try:
+            subprocess.call(["cmd", "/c", "move", "/y", NEW_EXE, TARGET_EXE],
+                            creationflags=0x08000000)
+        except Exception: pass
+    time.sleep(0.5)
+    try:
+        subprocess.Popen([TARGET_EXE], creationflags=0x00000008, close_fds=True)
+    except Exception: pass
+    try:
+        me = os.path.abspath(__file__)
+        subprocess.Popen(
+            ["cmd", "/c", "ping -n 3 127.0.0.1 >nul & del /f /q \\"" + me + "\\""],
+            creationflags=0x08000000, shell=False)
+    except Exception: pass
+
+if __name__ == "__main__":
+    main()
+'''
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(script)
+
+
+def _find_python_executable():
+    candidates = []
+    for name in ("pythonw.exe", "python.exe", "py.exe"):
+        candidates.append(name)
+    base = os.path.dirname(sys.executable)
+    for name in ("pythonw.exe", "python.exe"):
+        candidates.append(os.path.join(base, name))
+    for ver in ("313", "312", "311", "310", "39", "38"):
+        for root in (
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python"),
+            r"C:\Python" + ver,
+            os.path.expandvars(r"%ProgramFiles%\Python" + ver),
+        ):
+            for name in ("pythonw.exe", "python.exe"):
+                candidates.append(os.path.join(root, f"Python{ver}", name))
+                candidates.append(os.path.join(root, name))
+    for c in candidates:
+        found = shutil.which(c) or (os.path.isfile(c) and c)
+        if found:
+            return found
+    return None
+
+
 def apply_update_and_restart(new_exe_path):
     if not getattr(sys, "frozen", False):
         return
-    current_exe = sys.executable
+    current_exe = os.path.abspath(sys.executable)
     current_pid = os.getpid()
     tmp_dir = tempfile.gettempdir()
-    bat_path = os.path.join(tmp_dir, "pdkopirka_update.bat")
-    vbs_path = os.path.join(tmp_dir, "pdkopirka_update.vbs")
-    bat_content = f"""@echo off
-chcp 65001 >nul 2>&1
-set /a cnt=0
-:wait_process
-set /a cnt+=1
-tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R "[0-9]" >nul 2>&1
-if not errorlevel 1 (
-    if %cnt% gtr 60 goto skip_wait
-    ping -n 2 127.0.0.1 >nul 2>&1
-    goto wait_process
-)
-:skip_wait
-ping -n 2 127.0.0.1 >nul 2>&1
-for /d %%D in ("%TEMP%\\_MEI*") do rmdir /s /q "%%D" >nul 2>&1
-set /a tries=0
-:replace
-set /a tries+=1
-move /y "{new_exe_path}" "{current_exe}" >nul 2>&1
-if errorlevel 1 (
-    if %tries% lss 15 (
-        ping -n 2 127.0.0.1 >nul 2>&1
-        goto replace
-    ) else (
-        exit /b 1
-    )
-)
-start "" "{current_exe}"
-del "{vbs_path}" >nul 2>&1
-(goto) 2>nul & del "%~f0"
+
+    python_exe = _find_python_executable()
+    if python_exe:
+        script_path = os.path.join(tmp_dir, "pdkopirka_updater.py")
+        try:
+            _write_updater_script(script_path, new_exe_path,
+                                  current_exe, current_pid)
+            subprocess.Popen(
+                [python_exe, script_path],
+                creationflags=(subprocess.CREATE_NO_WINDOW |
+                               subprocess.DETACHED_PROCESS),
+                close_fds=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            QApplication.quit()
+            sys.exit(0)
+        except Exception:
+            pass
+
+    _apply_update_powershell(new_exe_path, current_exe, current_pid, tmp_dir)
+
+
+def _apply_update_powershell(new_exe, current_exe, current_pid, tmp_dir):
+    def ps_path(p):
+        return p.replace("'", "''")
+
+    ps_script = f"""
+$newExe     = '{ps_path(new_exe)}'
+$targetExe  = '{ps_path(current_exe)}'
+$oldPid     = {current_pid}
+
+$proc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+if ($proc) {{ $proc.WaitForExit(30000) | Out-Null }}
+Start-Sleep -Milliseconds 1500
+
+$replaced = $false
+for ($i = 0; $i -lt 30; $i++) {{
+    try {{
+        $oldBak = $targetExe + '.old'
+        if (Test-Path $oldBak) {{ Remove-Item $oldBak -Force -ErrorAction Stop }}
+        if (Test-Path $targetExe) {{ Rename-Item $targetExe $oldBak -Force -ErrorAction Stop }}
+        Copy-Item $newExe $targetExe -Force -ErrorAction Stop
+        if (Test-Path $oldBak) {{ Remove-Item $oldBak -Force -ErrorAction SilentlyContinue }}
+        if (Test-Path $newExe) {{ Remove-Item $newExe -Force -ErrorAction SilentlyContinue }}
+        $replaced = $true
+        break
+    }} catch {{ Start-Sleep -Seconds 1 }}
+}}
+
+if (-not $replaced) {{
+    & cmd /c "move /y `"$newExe`" `"$targetExe`"" 2>$null
+}}
+
+Start-Sleep -Milliseconds 500
+Start-Process $targetExe
+
+$me = $MyInvocation.MyCommand.Path
+Start-Sleep -Milliseconds 500
+Remove-Item $me -Force -ErrorAction SilentlyContinue
 """
-    vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run "cmd /c """"{bat_path}""""", 0, False
-Set WshShell = Nothing
-'''
+
+    ps_path_file = os.path.join(tmp_dir, "pdkopirka_update.ps1")
     try:
-        with open(bat_path, "w", encoding="cp866", errors="replace") as f:
-            f.write(bat_content)
-        with open(vbs_path, "w", encoding="utf-8") as f:
-            f.write(vbs_content)
+        with open(ps_path_file, "w", encoding="utf-8-sig") as f:
+            f.write(ps_script)
         subprocess.Popen(
-            ["wscript.exe", "//B", "//Nologo", vbs_path],
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            ["powershell.exe", "-NonInteractive", "-WindowStyle", "Hidden",
+             "-ExecutionPolicy", "Bypass", "-File", ps_path_file],
+            creationflags=(subprocess.CREATE_NO_WINDOW |
+                           subprocess.DETACHED_PROCESS),
+            close_fds=True, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        QApplication.quit()
+        sys.exit(0)
+    except Exception:
+        _apply_update_bat(new_exe, current_exe, current_pid, tmp_dir)
+
+
+def _apply_update_bat(new_exe, current_exe, current_pid, tmp_dir):
+    bat_path = os.path.join(tmp_dir, "pdkopirka_update.bat")
+
+    def to_short_path(p):
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(32767)
+            ctypes.windll.kernel32.GetShortPathNameW(p, buf, 32767)
+            return buf.value or p
+        except Exception:
+            return p
+
+    new_short = to_short_path(new_exe)
+    current_short = to_short_path(current_exe)
+
+    bat_content = (
+        "@echo off\r\n"
+        "chcp 437 >nul 2>&1\r\n"
+        f"set NEW_EXE={new_short}\r\n"
+        f"set TGT_EXE={current_short}\r\n"
+        f"set OLD_PID={current_pid}\r\n"
+        "\r\n"
+        "set /a cnt=0\r\n"
+        ":wait_loop\r\n"
+        "set /a cnt+=1\r\n"
+        f'tasklist /FI "PID eq {current_pid}" /NH 2>nul | findstr /R "[0-9]" >nul 2>&1\r\n'
+        "if errorlevel 1 goto do_replace\r\n"
+        "if %cnt% gtr 60 goto do_replace\r\n"
+        "ping -n 2 127.0.0.1 >nul 2>&1\r\n"
+        "goto wait_loop\r\n"
+        "\r\n"
+        ":do_replace\r\n"
+        "ping -n 3 127.0.0.1 >nul 2>&1\r\n"
+        "set /a tries=0\r\n"
+        ":replace\r\n"
+        "set /a tries+=1\r\n"
+        'if exist "%TGT_EXE%.old" del /f /q "%TGT_EXE%.old" >nul 2>&1\r\n'
+        'rename "%TGT_EXE%" "%TGT_EXE%.old" >nul 2>&1\r\n'
+        'copy /y "%NEW_EXE%" "%TGT_EXE%" >nul 2>&1\r\n'
+        'if exist "%TGT_EXE%" goto success\r\n'
+        "if %tries% lss 20 (\r\n"
+        '    rename "%TGT_EXE%.old" "%TGT_EXE%" >nul 2>&1\r\n'
+        "    ping -n 2 127.0.0.1 >nul 2>&1\r\n"
+        "    goto replace\r\n"
+        ")\r\n"
+        "goto end\r\n"
+        "\r\n"
+        ":success\r\n"
+        'del /f /q "%TGT_EXE%.old" >nul 2>&1\r\n'
+        'del /f /q "%NEW_EXE%" >nul 2>&1\r\n'
+        'start "" "%TGT_EXE%"\r\n'
+        "\r\n"
+        ":end\r\n"
+        '(goto) 2>nul & del "%~f0"\r\n'
+    )
+
+    try:
+        with open(bat_path, "w", encoding="ascii", errors="replace") as f:
+            f.write(bat_content)
+        subprocess.Popen(
+            ["cmd.exe", "/c", bat_path],
+            creationflags=(subprocess.CREATE_NO_WINDOW |
+                           subprocess.DETACHED_PROCESS),
             close_fds=True, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -325,17 +536,22 @@ class UpdateDialog(QDialog):
         lay.setContentsMargins(25, 25, 25, 25)
         t = QLabel(f"🔄 Обновление до версии {self.latest_version}")
         t.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        t.setStyleSheet("color: #0066cc;")
+        t.setStyleSheet("color: #0066cc; background: transparent;")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
+        self.progress.setStyleSheet(
+            "QProgressBar { border: 1px solid #ddd; border-radius: 4px; "
+            "background-color: white; color: #333; } "
+            "QProgressBar::chunk { background-color: #0066cc; }"
+        )
         lay.addWidget(self.progress)
         self.status_lbl = QLabel("Подготовка...")
         self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_lbl.setStyleSheet("color: #555;")
+        self.status_lbl.setStyleSheet("color: #555; background: transparent;")
         lay.addWidget(self.status_lbl)
 
     def closeEvent(self, e):
@@ -375,77 +591,34 @@ class UpdateDialog(QDialog):
         self.progress.setValue(100)
         self.status_lbl.setText("✅ Загружено! Программа закроется...")
         QApplication.processEvents()
+        time.sleep(1)
         apply_update_and_restart(new_exe)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Диалог «Что нового» — текст задаётся прямо в коде
+# Диалог «Что нового»
 # ─────────────────────────────────────────────────────────────────────────────
 
 CHANGELOG_HTML = """
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.1</h2>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    ✨ Новые возможности
-</h3>
-<ul>
-    <li>📐 <b>Справочник форматов</b> — добавлена выдвижная панель справа в окне нестандартного формата с полным списком всех поддерживаемых форматов (A4–A0 и их производные)</li>
-    <li>🎨 <b>Цветовая кодировка форматов</b> в справочнике:
-        <ul>
-            <li><span style="color:#2e7d32;">🟢 Зелёный</span> — печать <i>без резки</i></li>
-            <li><span style="color:#1565c0;">🔵 Синий</span> — требуется <i>резка</i></li>
-            <li><span style="color:#c62828;">🔴 Красный</span> — <i>нет возможности</i> распечатать</li>
-        </ul>
-    </li>
-    <li>✂️ <b>Новый блок «Резка»</b> во вкладке менеджера — автоматический подсчёт форматов, требующих резки (<code>A4x3</code>, <code>A4x5</code>–<code>A4x9</code>, <code>A3x3</code>–<code>A3x9</code>)</li>
-    <li>🌀 <b>Учёт рулонных страниц при фальцовке</b> — теперь рулонные форматы корректно попадают в расчёт фальцовки с указанием <b>реальных размеров</b></li>
-    <li>📄 <b>Детализированный вывод рулонных групп</b> в детализации по файлам с указанием размеров каждой страницы</li>
-    <li>🎉 <b>Окно «Что нового»</b> — после обновления показывается список изменений</li>
-    <li>💾 <b>История расчётов</b> — теперь можно сохранять расчёты и возвращаться к ним позже без повторного анализа</li>
-    <li>🔗 <b>Ссылки на нижней панели</b> главной вкладки:
-        <ul>
-            <li>⭐ Оставить благодарность в Bitrix</li>
-            <li>🐛 Контакт для сообщений об ошибках</li>
-        </ul>
-    </li>
-</ul>
+<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.4</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     🎨 Улучшения интерфейса
 </h3>
 <ul>
-    <li>🖼️ Добавлена <b>иконка приложения</b> в заголовке окна и на панели задач</li>
-    <li>📋 Tooltips при наведении на форматы в справочнике (всплывающие подсказки о возможности печати/резки)</li>
-    <li>🔧 Окно нестандартного формата теперь <i>шире и удобнее</i> для работы</li>
+    <li>🖥️ <b>Принудительная светлая тема</b> — текст больше не становится невидимым на Windows 11 с тёмной темой</li>
+    <li>🎯 Используется стиль <b>Fusion</b> — стабильное отображение на всех платформах</li>
+    <li>🔤 <b>Явные цвета текста</b> во всех элементах интерфейса</li>
 </ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🐛 Исправления
+    🔧 Улучшения обновления
 </h3>
 <ul>
-    <li>Исправлен расчёт фальцовки — рулонные форматы больше не теряются</li>
-    <li>Убрана секция «Резка» из общего текстового отчёта (теперь только во вкладке менеджера)</li>
-    <li>Улучшено распознавание цветных страниц с мелкими элементами (подписи, тонкие линии)</li>
+    <li>🔄 <b>Надёжное обновление</b> — 3 стратегии замены файла (Python-скрипт → PowerShell → BAT)</li>
+    <li>🖥️ Корректная работа на Windows 11 с антивирусами и прокси</li>
 </ul>
 
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.2</h2>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    ✨ Главное
-</h3>
-<ul>
-    <li>💾 <b>История расчётов</b> — все анализы автоматически сохраняются, можно вернуться к любому ранее проведённому расчёту без повторного анализа файлов</li>
-    <li>📚 <b>Новая вкладка «История»</b> с сортировкой по дате, названию, количеству файлов и страниц</li>
-    <li>📊 <b>Рулонные форматы в отчёте</b> — отдельный блок с реальными размерами, учитываются в итоговом количестве страниц</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🔧 Улучшения
-</h3>
-<ul>
-    <li>🔐 Надёжное автообновление на корпоративных компьютерах с антивирусами/прокси</li>
-    <li>🚨 Понятные сообщения при проблемах с обновлением или сетью</li>
-</ul>
 <h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.3</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
@@ -462,6 +635,21 @@ CHANGELOG_HTML = """
 <ul>
     <li>✂️ В отображении номеров страниц убраны пробелы после запятых — список стал компактнее</li>
     <li>📚 Обновлено оформление вывода в детализации файлов и связанных окнах</li>
+</ul>
+
+<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.2</h2>
+<ul>
+    <li>💾 <b>История расчётов</b> — все анализы автоматически сохраняются</li>
+    <li>📚 <b>Новая вкладка «История»</b></li>
+    <li>🔐 Надёжное автообновление на корпоративных компьютерах</li>
+</ul>
+
+<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.1</h2>
+<ul>
+    <li>📐 <b>Справочник форматов</b></li>
+    <li>✂️ <b>Блок «Резка»</b></li>
+    <li>🌀 <b>Учёт рулонных страниц при фальцовке</b></li>
+    <li>🎉 <b>Окно «Что нового»</b></li>
 </ul>
 """
 
@@ -483,14 +671,14 @@ class WhatsNewDialog(QDialog):
         title = QLabel(f"🎉 Версия {self.current_version}")
         title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #0066cc;")
+        title.setStyleSheet("color: #0066cc; background: transparent;")
         lay.addWidget(title)
 
         self.te = QTextEdit()
         self.te.setReadOnly(True)
         self.te.setFont(QFont("Arial", 10))
         self.te.setStyleSheet(
-            "QTextEdit { background: white; border: 1px solid #ddd; "
+            "QTextEdit { background: white; color: #333; border: 1px solid #ddd; "
             "border-radius: 6px; padding: 8px; }"
         )
         self.te.setHtml(CHANGELOG_HTML)
@@ -507,14 +695,16 @@ class WhatsNewDialog(QDialog):
         btn.clicked.connect(self.accept)
         lay.addWidget(btn)
 
-        self.setStyleSheet("QDialog { background-color: #f5f6f7; }")
+        self.setStyleSheet(
+            "QDialog { background-color: #f5f6f7; color: #333; }"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # История расчётов
 # ─────────────────────────────────────────────────────────────────────────────
+
 class SortableTableItem(QTableWidgetItem):
-    """QTableWidgetItem с раздельным значением для отображения и сортировки."""
     def __init__(self, display_text, sort_value):
         super().__init__(str(display_text))
         self._sort_value = sort_value
@@ -546,7 +736,6 @@ class HistoryManager:
         safe_name = HistoryManager._sanitize_filename(name)
         filename = f"{ts}__{safe_name}.json"
         filepath = HistoryManager.get_dir() / filename
-
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(calc_data, f, ensure_ascii=False, indent=2)
         return filepath
@@ -723,12 +912,12 @@ class LoginDialog(QDialog):
         t = QLabel("🔐 Вход в систему")
         t.setFont(QFont("Arial", 14, QFont.Weight.Bold))
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        t.setStyleSheet("color: #0066cc;")
+        t.setStyleSheet("color: #0066cc; background: transparent;")
         lay.addWidget(t)
         s = QLabel("Калькулятор расчёта проектной документации")
         s.setFont(QFont("Arial", 10))
         s.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        s.setStyleSheet("color: #666;")
+        s.setStyleSheet("color: #666; background: transparent;")
         lay.addWidget(s)
         lay.addSpacing(10)
         ist = (
@@ -751,7 +940,9 @@ class LoginDialog(QDialog):
         self.edit_password.returnPressed.connect(self._try_login)
         lay.addWidget(self.edit_password)
         self.lbl_error = QLabel("")
-        self.lbl_error.setStyleSheet("color: red; font-size: 11px;")
+        self.lbl_error.setStyleSheet(
+            "color: red; font-size: 11px; background: transparent;"
+        )
         self.lbl_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.lbl_error)
         b = QPushButton("Войти")
@@ -774,7 +965,9 @@ class LoginDialog(QDialog):
         )
         be.clicked.connect(self._exit_app)
         lay.addWidget(be)
-        self.setStyleSheet("QDialog { background-color: #f5f6f7; }")
+        self.setStyleSheet(
+            "QDialog { background-color: #f5f6f7; color: #333; }"
+        )
 
     def _try_login(self):
         if _h(self.edit_login.text().strip().lower()) == _VL and \
@@ -823,7 +1016,7 @@ class FormatHintPanel(QFrame):
         self._btn_width = 28
         self.setStyleSheet(
             "FormatHintPanel { background-color: #f9f9f9; "
-            "border: 2px solid #0066cc; border-radius: 8px; }"
+            "border: 2px solid #0066cc; border-radius: 8px; color: #333; }"
         )
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -852,7 +1045,9 @@ class FormatHintPanel(QFrame):
         title = QLabel("📐 Справочник форматов")
         title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #0066cc; background: transparent; border: none;")
+        title.setStyleSheet(
+            "color: #0066cc; background: transparent; border: none;"
+        )
         cl.addWidget(title)
 
         legend = QLabel(
@@ -862,15 +1057,19 @@ class FormatHintPanel(QFrame):
         )
         legend.setFont(QFont("Arial", 8))
         legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        legend.setStyleSheet("background: transparent; border: none; padding: 2px;")
+        legend.setStyleSheet(
+            "background: transparent; border: none; padding: 2px; color: #333;"
+        )
         legend.setWordWrap(True)
         cl.addWidget(legend)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
         fw = QWidget()
-        fw.setStyleSheet("background: transparent;")
+        fw.setStyleSheet("background: transparent; color: #333;")
         fl = QVBoxLayout(fw)
         fl.setContentsMargins(4, 4, 4, 4)
         fl.setSpacing(2)
@@ -880,7 +1079,7 @@ class FormatHintPanel(QFrame):
         self._fmt_label.setWordWrap(True)
         self._fmt_label.setTextFormat(Qt.TextFormat.RichText)
         self._fmt_label.setStyleSheet(
-            "background: transparent; border: none; padding: 4px;"
+            "background: transparent; border: none; padding: 4px; color: #333;"
         )
         self._fmt_label.setMouseTracking(True)
         self._fmt_label.installEventFilter(self)
@@ -1031,6 +1230,10 @@ class UnknownFormatDialog(QDialog):
 
         ib = QGroupBox("Обнаружен неизвестный формат")
         ib.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        ib.setStyleSheet(
+            "QGroupBox { color: #333; background-color: white; } "
+            "QGroupBox::title { color: #333; }"
+        )
         il = QVBoxLayout(ib)
         for t in [f"Файл: <b>{os.path.basename(self.pdf_path)}</b>",
                   f"Размер: <b>{self.w} × {self.h} мм</b>",
@@ -1038,19 +1241,30 @@ class UnknownFormatDialog(QDialog):
                   f"Страниц: <b>{len(self.pages)}</b>  ({rng})"]:
             lb = QLabel(t)
             lb.setFont(QFont("Arial", 10))
+            lb.setStyleSheet("color: #333; background: transparent;")
             il.addWidget(lb)
         bo = QPushButton("👁️ Открыть эти страницы для просмотра")
         bo.setFont(QFont("Arial", 10))
-        bo.setStyleSheet("background-color:#e67e22;color:white;padding:10px;")
+        bo.setStyleSheet(
+            "QPushButton { background-color:#e67e22; color:white; padding:10px; } "
+            "QPushButton:hover { background-color:#d35400; }"
+        )
         bo.clicked.connect(self._open_pages)
         il.addWidget(bo)
         root.addWidget(ib)
 
         fb = QGroupBox("Вариант 1 — подогнать к формату")
+        fb.setStyleSheet(
+            "QGroupBox { color: #333; background-color: white; } "
+            "QGroupBox::title { color: #333; }"
+        )
         fl = QHBoxLayout(fb)
         self.edit_format = QLineEdit()
         self.edit_format.setPlaceholderText("Например: A4, A3, A3x3, A2x4 …")
         self.edit_format.setFont(QFont("Arial", 10))
+        self.edit_format.setStyleSheet(
+            "QLineEdit { color: #333; background: white; border: 1px solid #ccc; }"
+        )
         fl.addWidget(self.edit_format)
         bf = QPushButton("Применить формат")
         bf.setFixedWidth(160)
@@ -1059,12 +1273,21 @@ class UnknownFormatDialog(QDialog):
         root.addWidget(fb)
 
         rb = QGroupBox("Вариант 2 — рулонная печать")
+        rb.setStyleSheet(
+            "QGroupBox { color: #333; background-color: white; } "
+            "QGroupBox::title { color: #333; }"
+        )
         rl = QVBoxLayout(rb)
         rr = QHBoxLayout()
-        rr.addWidget(QLabel("Длина на страницу (мм или м):"))
+        lbl_len = QLabel("Длина на страницу (мм или м):")
+        lbl_len.setStyleSheet("color: #333; background: transparent;")
+        rr.addWidget(lbl_len)
         self.edit_roll = QLineEdit()
         self.edit_roll.setPlaceholderText("Например: 594 или 0.594")
         self.edit_roll.setFont(QFont("Arial", 10))
+        self.edit_roll.setStyleSheet(
+            "QLineEdit { color: #333; background: white; border: 1px solid #ccc; }"
+        )
         rr.addWidget(self.edit_roll)
         br = QPushButton("Применить длину")
         br.setFixedWidth(160)
@@ -1081,7 +1304,10 @@ class UnknownFormatDialog(QDialog):
         root.addWidget(rb)
 
         bs = QPushButton("Пропустить (не учитывать эти страницы)")
-        bs.setStyleSheet("background-color:#888;color:white;")
+        bs.setStyleSheet(
+            "QPushButton { background-color:#888; color:white; } "
+            "QPushButton:hover { background-color:#666; }"
+        )
         bs.clicked.connect(self._skip)
         root.addWidget(bs)
 
@@ -1397,6 +1623,7 @@ class PrintingCalculator(QMainWindow):
         self.danger_color = "#d33"
         self.bg_color = "#f5f6f7"
         self.card_color = "#ffffff"
+        self.text_color = "#333333"
         self.apply_style()
         self.grand = {}
         self.total_source = 0
@@ -1414,80 +1641,191 @@ class PrintingCalculator(QMainWindow):
 
     def save_details_txt(self):
         text = self.text_details.toPlainText().strip()
-
         if not text:
             QMessageBox.information(
-                self,
-                "Сохранение",
+                self, "Сохранение",
                 "Нет данных для сохранения.\nСначала выполните анализ."
             )
             return
-
         default_name = f"detalizaciya_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
-
         file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить детализацию в TXT",
-            default_name,
+            self, "Сохранить детализацию в TXT", default_name,
             "Текстовые файлы (*.txt);;Все файлы (*)"
         )
-
         if not file_path:
             return
-
         if not file_path.lower().endswith(".txt"):
             file_path += ".txt"
-
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(text)
             self.label_status.setText(f"✅ Детализация сохранена: {file_path}")
         except Exception as e:
             QMessageBox.critical(
-                self,
-                "Ошибка сохранения",
+                self, "Ошибка сохранения",
                 f"Не удалось сохранить файл:\n{e}"
             )
 
     def apply_style(self):
         self.setStyleSheet(f"""
-            QMainWindow, QWidget {{ background-color: {self.bg_color}; }}
-            QTabWidget::pane {{ border: 1px solid #ddd; background-color: {self.bg_color}; }}
-            QTabBar::tab {{ background-color: #e8e8e8; padding: 8px 20px;
-                margin-right: 2px; border: 1px solid #ddd; color: #333; font-weight: bold; }}
-            QTabBar::tab:selected {{ background-color: {self.primary_color}; color: white; }}
-            QFrame {{ background-color: {self.card_color}; border-radius: 4px;
-                border: 1px solid #e0e0e0; }}
-            QGroupBox {{ background-color: {self.card_color}; border: 1px solid #d0d0d0;
-                border-radius: 6px; margin-top: 8px; padding-top: 4px;
-                font-weight: bold; color: #333; }}
-            QGroupBox::title {{ subcontrol-origin: margin; subcontrol-position: top left;
-                padding: 0 6px; }}
-            QPushButton {{ background-color: {self.primary_color}; color: white; border: none;
-                padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 11px; }}
-            QPushButton:hover {{ background-color: #0052a3; }}
-            QPushButton:pressed {{ background-color: #003d7a; }}
-            QPushButton:disabled {{ background-color: #bbb; color: #eee; }}
-            QLabel {{ color: #333; }}
-            QLineEdit {{ background-color: white; border: 1px solid #ccc;
-                border-radius: 4px; padding: 4px 6px; color: #333; }}
-            QTextEdit {{ background-color: {self.card_color}; border: 1px solid #e0e0e0;
-                border-radius: 4px; }}
-            QSpinBox {{ background-color: {self.card_color}; color: #333; }}
-            QRadioButton {{ background-color: {self.card_color}; color: #333;
-                padding: 4px 12px; font-weight: normal; }}
-            QRadioButton::indicator {{ width: 16px; height: 16px; }}
-            QRadioButton::indicator:unchecked {{ background-color: white;
-                border: 2px solid #ccc; border-radius: 9px; }}
-            QRadioButton::indicator:checked {{ background-color: {self.primary_color};
-                border: 2px solid {self.primary_color}; border-radius: 9px; }}
-            QRadioButton:disabled {{ color: #aaa; }}
-            QRadioButton::indicator:disabled {{ background-color: #eee;
-                border: 2px solid #ddd; }}
-            QTableWidget {{ background-color: white; gridline-color: #ddd;
-                selection-background-color: #cce4ff; selection-color: #000; }}
-            QHeaderView::section {{ background-color: #e8e8e8; padding: 6px;
-                border: 1px solid #ddd; font-weight: bold; color: #333; }}
+            QMainWindow, QWidget {{
+                background-color: {self.bg_color};
+                color: {self.text_color};
+            }}
+            QTabWidget::pane {{
+                border: 1px solid #ddd;
+                background-color: {self.bg_color};
+                color: {self.text_color};
+            }}
+            QTabBar::tab {{
+                background-color: #e8e8e8;
+                padding: 8px 20px;
+                margin-right: 2px;
+                border: 1px solid #ddd;
+                color: {self.text_color};
+                font-weight: bold;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {self.primary_color};
+                color: white;
+            }}
+            QFrame {{
+                background-color: {self.card_color};
+                border-radius: 4px;
+                border: 1px solid #e0e0e0;
+                color: {self.text_color};
+            }}
+            QGroupBox {{
+                background-color: {self.card_color};
+                border: 1px solid #d0d0d0;
+                border-radius: 6px;
+                margin-top: 8px;
+                padding-top: 4px;
+                font-weight: bold;
+                color: {self.text_color};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 6px;
+                color: {self.text_color};
+            }}
+            QPushButton {{
+                background-color: {self.primary_color};
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #0052a3;
+            }}
+            QPushButton:pressed {{
+                background-color: #003d7a;
+            }}
+            QPushButton:disabled {{
+                background-color: #bbb;
+                color: #eee;
+            }}
+            QLabel {{
+                color: {self.text_color};
+                background: transparent;
+            }}
+            QLineEdit {{
+                background-color: white;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 4px 6px;
+                color: {self.text_color};
+            }}
+            QTextEdit {{
+                background-color: {self.card_color};
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                color: {self.text_color};
+                selection-background-color: #cce4ff;
+                selection-color: #000;
+            }}
+            QSpinBox {{
+                background-color: {self.card_color};
+                color: {self.text_color};
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 2px 4px;
+            }}
+            QCheckBox {{
+                color: {self.text_color};
+                background: transparent;
+            }}
+            QRadioButton {{
+                background-color: {self.card_color};
+                color: {self.text_color};
+                padding: 4px 12px;
+                font-weight: normal;
+            }}
+            QRadioButton::indicator {{
+                width: 16px;
+                height: 16px;
+            }}
+            QRadioButton::indicator:unchecked {{
+                background-color: white;
+                border: 2px solid #ccc;
+                border-radius: 9px;
+            }}
+            QRadioButton::indicator:checked {{
+                background-color: {self.primary_color};
+                border: 2px solid {self.primary_color};
+                border-radius: 9px;
+            }}
+            QRadioButton:disabled {{
+                color: #aaa;
+            }}
+            QRadioButton::indicator:disabled {{
+                background-color: #eee;
+                border: 2px solid #ddd;
+            }}
+            QTableWidget {{
+                background-color: white;
+                color: {self.text_color};
+                gridline-color: #ddd;
+                selection-background-color: #cce4ff;
+                selection-color: #000;
+            }}
+            QHeaderView::section {{
+                background-color: #e8e8e8;
+                padding: 6px;
+                border: 1px solid #ddd;
+                font-weight: bold;
+                color: {self.text_color};
+            }}
+            QProgressBar {{
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                text-align: center;
+                height: 25px;
+                color: {self.text_color};
+                background-color: white;
+            }}
+            QProgressBar::chunk {{
+                background-color: {self.primary_color};
+            }}
+            QScrollArea {{
+                background-color: {self.bg_color};
+                color: {self.text_color};
+                border: none;
+            }}
+            QToolTip {{
+                background-color: #ffffcc;
+                color: #333;
+                border: 1px solid #999;
+                padding: 4px;
+            }}
+            QMessageBox {{
+                background-color: {self.bg_color};
+                color: {self.text_color};
+            }}
         """)
 
     def init_ui(self):
@@ -1507,6 +1845,7 @@ class PrintingCalculator(QMainWindow):
     def _bold_label(self, text, size=11):
         lb = QLabel(text)
         lb.setFont(QFont("Arial", size, QFont.Weight.Bold))
+        lb.setStyleSheet(f"color: {self.text_color}; background: transparent;")
         return lb
 
     def show_whats_new(self):
@@ -1526,7 +1865,9 @@ class PrintingCalculator(QMainWindow):
         fl.addWidget(self._bold_label("📁 Выберите папку:"))
         row = QHBoxLayout()
         self.label_path = QLabel("Путь не выбран")
-        self.label_path.setStyleSheet("color: #666; padding: 5px;")
+        self.label_path.setStyleSheet(
+            "color: #666; padding: 5px; background: transparent;"
+        )
         row.addWidget(self.label_path)
         bb = QPushButton("📂 Обзор...")
         bb.clicked.connect(self.browse_path)
@@ -1552,7 +1893,9 @@ class PrintingCalculator(QMainWindow):
             "«По файлу» — анализ цвета каждой страницы.  "
             "«Ч/б» — всё считается чёрно-белым."
         )
-        h.setStyleSheet("color: #666; font-size: 10px;")
+        h.setStyleSheet(
+            "color: #666; font-size: 10px; background: transparent;"
+        )
         h.setWordWrap(True)
         cl.addWidget(h)
         lay.addWidget(cf)
@@ -1561,7 +1904,11 @@ class PrintingCalculator(QMainWindow):
         pl = QVBoxLayout(pf)
         pl.addWidget(self._bold_label("⚙️ Параметры:"))
         r2 = QHBoxLayout()
-        r2.addWidget(QLabel("Количество экземпляров:"))
+        lbl_copies = QLabel("Количество экземпляров:")
+        lbl_copies.setStyleSheet(
+            f"color: {self.text_color}; background: transparent;"
+        )
+        r2.addWidget(lbl_copies)
         self.spinbox_copies = NoScrollSpinBox()
         self.spinbox_copies.setMinimum(1)
         self.spinbox_copies.setMaximum(100)
@@ -1606,14 +1953,12 @@ class PrintingCalculator(QMainWindow):
         pgl = QVBoxLayout(pgf)
         pgl.addWidget(self._bold_label("Статус анализа:", 10))
         self.label_status = QLabel("Готово")
+        self.label_status.setStyleSheet(
+            f"color: {self.text_color}; background: transparent;"
+        )
         pgl.addWidget(self.label_status)
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
-        self.progress_bar.setStyleSheet(
-            f"QProgressBar {{ border: 1px solid #ddd; border-radius: 4px; "
-            f"text-align: center; height: 25px; }} "
-            f"QProgressBar::chunk {{ background-color: {self.primary_color}; }}"
-        )
         pgl.addWidget(self.progress_bar)
         lay.addWidget(pgf)
 
@@ -1639,7 +1984,6 @@ class PrintingCalculator(QMainWindow):
 
         lay.addStretch()
 
-        # ── Ссылки внизу ─────────────────────────────────────────────────
         links_layout = QHBoxLayout()
         links_layout.setContentsMargins(0, 5, 0, 0)
         links_layout.setSpacing(10)
@@ -1650,7 +1994,7 @@ class PrintingCalculator(QMainWindow):
             'Оставить благодарность в Bitrix</a>'
         )
         lbl_thx.setFont(QFont("Arial", 9))
-        lbl_thx.setStyleSheet("background: transparent; border: none;")
+        lbl_thx.setStyleSheet("background: transparent; border: none; color: #333;")
         lbl_thx.setOpenExternalLinks(True)
         links_layout.addWidget(lbl_thx)
 
@@ -1705,21 +2049,21 @@ class PrintingCalculator(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(20, 20, 20, 20)
         lay.setSpacing(10)
-
         lay.addWidget(self._bold_label(
             "📊 Детализация по файлам (1 экз., с номерами страниц):"
         ))
-
         self.text_details = QTextEdit()
         self.text_details.setReadOnly(True)
         self.text_details.setFont(QFont("Consolas", 9))
+        self.text_details.setStyleSheet(
+            f"QTextEdit {{ background-color: white; color: {self.text_color}; "
+            f"border: 1px solid #e0e0e0; border-radius: 4px; }}"
+        )
         lay.addWidget(self.text_details)
-
         btn_save_details = QPushButton("💾 Сохранить в TXT (Для производства)")
         btn_save_details.setMinimumHeight(40)
         btn_save_details.clicked.connect(self.save_details_txt)
         lay.addWidget(btn_save_details)
-
         return w
 
     # ── Вкладка менеджера ────────────────────────────────────────────────
@@ -1748,6 +2092,10 @@ class PrintingCalculator(QMainWindow):
                 te.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed
             )
             te.setMinimumHeight(minh)
+            te.setStyleSheet(
+                f"QTextEdit {{ background-color: white; color: {self.text_color}; "
+                f"border: 1px solid #e0e0e0; border-radius: 4px; }}"
+            )
             fl_.addWidget(te)
             setattr(self, attr, te)
             return frame
@@ -1765,7 +2113,9 @@ class PrintingCalculator(QMainWindow):
         tl = QVBoxLayout(tf)
         self.label_total = QLabel("⚖️ Вес: —")
         self.label_total.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        self.label_total.setStyleSheet(f"color: {self.primary_color};")
+        self.label_total.setStyleSheet(
+            f"color: {self.primary_color}; background: transparent;"
+        )
         tl.addWidget(self.label_total)
         sl.addWidget(tf)
         sl.addStretch()
@@ -1784,13 +2134,15 @@ class PrintingCalculator(QMainWindow):
         self.text_report = QTextEdit()
         self.text_report.setReadOnly(True)
         self.text_report.setFont(QFont("Courier", 9))
+        self.text_report.setStyleSheet(
+            f"QTextEdit {{ background-color: white; color: {self.text_color}; "
+            f"border: 1px solid #e0e0e0; border-radius: 4px; }}"
+        )
         lay.addWidget(self.text_report)
-
         bc = QPushButton("📋 Копировать в буфер обмена")
         bc.setMinimumHeight(40)
         bc.clicked.connect(self.copy_report)
         lay.addWidget(bc)
-
         return w
 
     # ── Вкладка истории ──────────────────────────────────────────────────
@@ -1814,7 +2166,9 @@ class PrintingCalculator(QMainWindow):
             "Двойной клик по строке — загрузить расчёт. "
             "Клик по заголовку столбца — сортировка."
         )
-        hint.setStyleSheet("color: #666; font-size: 10px; padding: 4px;")
+        hint.setStyleSheet(
+            "color: #666; font-size: 10px; padding: 4px; background: transparent;"
+        )
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
@@ -1835,7 +2189,8 @@ class PrintingCalculator(QMainWindow):
         self.history_table.cellDoubleClicked.connect(self.load_history_item)
         self.history_table.setAlternatingRowColors(True)
         self.history_table.setStyleSheet(
-            "QTableWidget { alternate-background-color: #f8f9fa; }"
+            f"QTableWidget {{ alternate-background-color: #f8f9fa; "
+            f"color: {self.text_color}; background-color: white; }}"
         )
         self.history_table.verticalHeader().setVisible(False)
         self.history_table.setSortingEnabled(True)
@@ -1967,17 +2322,13 @@ class PrintingCalculator(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.display_details()
         self.calculate_and_display()
-
-        # Автосохранение в историю
         if self.grand and not (self.thread and self.thread._stop_requested):
             self._auto_save_to_history()
 
     def _auto_save_to_history(self):
-        """Автосохранение текущего расчёта в историю."""
         if not self.grand:
             return
         try:
-            # Имя = название папки (или имя PDF, если выбран один файл)
             if self.selected_path:
                 base = os.path.basename(self.selected_path.rstrip("\\/"))
                 if base.lower().endswith(".pdf"):
@@ -1985,7 +2336,6 @@ class PrintingCalculator(QMainWindow):
                 name = base or "Расчёт"
             else:
                 name = "Расчёт"
-
             calc_data = {
                 'version': 1,
                 'app_version': APP_VERSION,
@@ -2028,54 +2378,49 @@ class PrintingCalculator(QMainWindow):
         self.btn_analyze.setEnabled(True)
         self.btn_stop.setEnabled(False)
 
-    # ── История: сохранение/загрузка ─────────────────────────────────────
+    # ── История ──────────────────────────────────────────────────────────
 
     def refresh_history(self):
         try:
             items = HistoryManager.list_all()
         except Exception:
             items = []
-
         self._history_items = items
-
-        # Отключаем сортировку на время заполнения
         self.history_table.setSortingEnabled(False)
         self.history_table.setRowCount(len(items))
-
         for row, item in enumerate(items):
             data = item['data']
             try:
                 dt = datetime.fromisoformat(data.get('saved_at', ''))
                 date_str = dt.strftime("%d.%m.%Y %H:%M:%S")
-                sort_key = dt.strftime("%Y%m%d%H%M%S")  # строка для корректной сортировки
+                sort_key = dt.strftime("%Y%m%d%H%M%S")
             except Exception:
                 date_str = "—"
                 sort_key = "0"
-
             src = data.get('source', {})
             files_count = src.get('files_count', 0)
             total_pages = src.get('total_pages', 0)
 
-            # Колонка 0 — Дата (текст для отображения, sort_key для сортировки)
             date_item = SortableTableItem(date_str, sort_key)
             date_item.setData(Qt.ItemDataRole.UserRole, row)
+            date_item.setForeground(QColor(self.text_color))
             self.history_table.setItem(row, 0, date_item)
 
-            # Колонка 1 — Название
             name_item = QTableWidgetItem(data.get('name', ''))
             name_item.setData(Qt.ItemDataRole.UserRole, row)
+            name_item.setForeground(QColor(self.text_color))
             self.history_table.setItem(row, 1, name_item)
 
-            # Колонка 2 — Файлов (числовая сортировка)
             files_item = SortableTableItem(str(files_count), files_count)
             files_item.setData(Qt.ItemDataRole.UserRole, row)
             files_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            files_item.setForeground(QColor(self.text_color))
             self.history_table.setItem(row, 2, files_item)
 
-            # Колонка 3 — Страниц (числовая сортировка)
             pages_item = SortableTableItem(str(total_pages), total_pages)
             pages_item.setData(Qt.ItemDataRole.UserRole, row)
             pages_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            pages_item.setForeground(QColor(self.text_color))
             self.history_table.setItem(row, 3, pages_item)
 
         header = self.history_table.horizontalHeader()
@@ -2083,31 +2428,24 @@ class PrintingCalculator(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-
         self.history_table.setSortingEnabled(True)
-        # Сортировка по умолчанию — дата по убыванию (новые сверху)
         self.history_table.sortItems(0, Qt.SortOrder.DescendingOrder)
 
     def _load_history_data(self, data):
-        """Восстанавливает состояние из сохранённого расчёта."""
         try:
             self.grand = data.get('grand', {})
             self.total_source = data.get('source', {}).get('total_pages', 0)
             self.file_page_counts = data.get('file_page_counts', [])
             self.file_details = data.get('file_details', [])
             self.selected_path = data.get('source', {}).get('path', '')
-
             if self.selected_path:
                 self.label_path.setText(f"✓ {self.selected_path}")
-
             params = data.get('params', {})
             self.copies = params.get('copies', 1)
             self.force_bw = params.get('force_bw', False)
-
             self.spinbox_copies.blockSignals(True)
             self.spinbox_copies.setValue(self.copies)
             self.spinbox_copies.blockSignals(False)
-
             folding = params.get('folding')
             if folding == 'A4':
                 self.rb_folding_a4.setChecked(True)
@@ -2118,7 +2456,6 @@ class PrintingCalculator(QMainWindow):
             else:
                 self.rb_folding_none.setChecked(True)
                 self.need_folding_a4 = self.need_folding_a3 = False
-
             binding = params.get('binding')
             if binding == 'A4':
                 self.rb_binding_a4.setChecked(True)
@@ -2129,15 +2466,12 @@ class PrintingCalculator(QMainWindow):
             else:
                 self.rb_binding_none.setChecked(True)
                 self.need_binding_a4 = self.need_binding_a3 = False
-
             if self.force_bw:
                 self.rb_color_bw.setChecked(True)
             else:
                 self.rb_color_auto.setChecked(True)
-
             self.display_details()
             self.calculate_and_display()
-
             self.tabs.setCurrentIndex(1)
             self.label_status.setText(
                 f"📂 Загружен расчёт: {data.get('name', '')}"
@@ -2149,7 +2483,6 @@ class PrintingCalculator(QMainWindow):
             )
 
     def _get_item_index_at_row(self, row):
-        """Возвращает индекс в self._history_items для отображаемой строки таблицы."""
         item = self.history_table.item(row, 0)
         if item is None:
             return -1
@@ -2161,10 +2494,7 @@ class PrintingCalculator(QMainWindow):
     def load_selected_history(self):
         row = self.history_table.currentRow()
         if row < 0:
-            QMessageBox.information(
-                self, "История",
-                "Выберите расчёт в таблице."
-            )
+            QMessageBox.information(self, "История", "Выберите расчёт в таблице.")
             return
         idx = self._get_item_index_at_row(row)
         if idx < 0:
@@ -2180,17 +2510,13 @@ class PrintingCalculator(QMainWindow):
     def delete_selected_history(self):
         row = self.history_table.currentRow()
         if row < 0:
-            QMessageBox.information(
-                self, "История",
-                "Выберите расчёт в таблице."
-            )
+            QMessageBox.information(self, "История", "Выберите расчёт в таблице.")
             return
         idx = self._get_item_index_at_row(row)
         if idx < 0:
             return
         item = self._history_items[idx]
         name = item['data'].get('name', 'без названия')
-
         ans = QMessageBox.question(
             self, "Подтверждение удаления",
             f"Удалить расчёт «{name}»?\n\nЭто действие необратимо.",
@@ -2199,15 +2525,11 @@ class PrintingCalculator(QMainWindow):
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
-
         if HistoryManager.delete(item['path']):
             self.refresh_history()
             self.label_status.setText(f"🗑 Удалён расчёт: {name}")
         else:
-            QMessageBox.warning(
-                self, "Ошибка",
-                "Не удалось удалить файл."
-            )
+            QMessageBox.warning(self, "Ошибка", "Не удалось удалить файл.")
 
     def open_history_folder(self):
         path = str(HistoryManager.get_dir())
@@ -2437,7 +2759,6 @@ class PrintingCalculator(QMainWindow):
         self.display_details()
         st, di, erb, erc = self._build_print_summary()
 
-        # Печать
         pl, tpp = [], 0
         for fmt in FMT_ORDER:
             fw, fh = ISO_A[fmt]
@@ -2456,7 +2777,6 @@ class PrintingCalculator(QMainWindow):
             "\n".join(pl) if pl else "Нет данных для печати"
         )
 
-        # Рулон
         rl = []
         rbt = self.grand.get("Рулон ч/б мм", 0) * self.copies + erb
         rct = self.grand.get("Рулон цвет мм", 0) * self.copies + erc
@@ -2468,7 +2788,6 @@ class PrintingCalculator(QMainWindow):
             "\n".join(rl) if rl else "Рулонная печать не требуется"
         )
 
-        # Резка
         cut_lines, cut_total = self._calc_cutting()
         if cut_lines:
             cp = ["Форматы, требующие резки:", ""]
@@ -2479,7 +2798,6 @@ class PrintingCalculator(QMainWindow):
         else:
             self.text_cutting.setText("Резка не требуется")
 
-        # Фальцовка
         ftp, tf, ft = [], 0, None
         slr, nlr = [], []
         if self.need_folding_a4:
@@ -2502,7 +2820,6 @@ class PrintingCalculator(QMainWindow):
             "\n".join(ftp) if ftp else "Фальцовка не требуется"
         )
 
-        # Брошюровка
         blines, tb, bt = [], 0, None
         if self.need_binding_a4:
             bt = "A4"; blines, tb = self._calc_binding()
@@ -2515,7 +2832,6 @@ class PrintingCalculator(QMainWindow):
         else:
             self.text_binding.setText("Брошюровка не требуется")
 
-        # Вес
         tw = self._calc_weight(st, rbt, rct, bt, tb)
         self.label_total.setText(
             f"⚖️ Вес: {self._fw(tw) if tw > 0 else '0.00 кг'}"
@@ -2533,7 +2849,6 @@ class PrintingCalculator(QMainWindow):
         c = self.copies
         tpr = 0
 
-        # Стандартные форматы
         sb = []
         for fmt in FMT_ORDER:
             fw, fh = ISO_A[fmt]
@@ -2544,7 +2859,6 @@ class PrintingCalculator(QMainWindow):
                     sb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
                     tpr += q
 
-        # Расширенные (нестандартные ISO) форматы
         nb = []
         for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
             for kind in KIND_ORDER:
@@ -2554,7 +2868,6 @@ class PrintingCalculator(QMainWindow):
                     nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
                     tpr += q
 
-        # Произвольные форматы
         cb = []
         for k in self.grand:
             if k.startswith("Рулон") or k.startswith("_roll_fold_"):
@@ -2568,9 +2881,7 @@ class PrintingCalculator(QMainWindow):
                 cb.append(f"{fmt} {kind} — {q} стр.")
                 tpr += q
 
-        # Рулонные форматы (по детализации каждой группы)
         rb_lines = []
-        seen = set()
         for fd in self.file_details:
             for rg in fd.get("roll_groups", []):
                 kind_str = "цвет" if rg.get("color") else "ч/б"
@@ -2583,18 +2894,15 @@ class PrintingCalculator(QMainWindow):
                 tpr += q
                 rb_lines.append(f"{w:.0f}×{h:.0f} мм {kind_str} — {q} шт.")
 
-        # Объединяем одинаковые размеры/цветности
         if rb_lines:
             agg = defaultdict(int)
             for line in rb_lines:
-                # парсим обратно: "WxH мм KIND — N шт."
                 m = re.match(r'(.+?) — (\d+) шт\.$', line)
                 if m:
                     key = m.group(1)
                     agg[key] += int(m.group(2))
             rb_lines = [f"{k} — {v} шт." for k, v in agg.items()]
 
-        # Рулоны в метрах (для блока РУЛОННАЯ ПЕЧАТЬ внизу отчёта)
         rbr = self.grand.get("Рулон ч/б мм", 0) * c
         rcr = self.grand.get("Рулон цвет мм", 0) * c
         cms = "Ч/б (принудительно)" if self.force_bw else "По файлу"
@@ -2698,6 +3006,9 @@ class PrintingCalculator(QMainWindow):
 def main():
     app = QApplication(sys.argv)
 
+    # === Принудительная светлая тема ===
+    force_light_palette(app)
+
     icon_path = resource_path("logo.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
@@ -2711,7 +3022,6 @@ def main():
     # 2. Обновление (только в frozen / exe режиме)
     if getattr(sys, "frozen", False):
         has_update, latest_ver, dl_url, upd_err = check_for_update()
-
         if upd_err:
             QMessageBox.warning(
                 None,
