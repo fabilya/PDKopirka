@@ -14,7 +14,7 @@
 [Setup]
 ; ВАЖНО: Этот AppId должен быть ОДИНАКОВЫМ во всех версиях!
 ; Именно он говорит Windows что это ТА ЖЕ программа.
-; Никогда не меняйте эту строку!
+; Никогда не ме��яйте эту строку!
 AppId={{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}
 
 AppName={#MyAppName}
@@ -67,8 +67,9 @@ MinVersion=10.0
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
-; Показать "Что нового" при обновлении
-InfoAfterFile=changelog.txt
+; УДАЛЕНО: InfoAfterFile=changelog.txt
+; Больше не показываем диалог "Что нового" при установке
+; (используется встроенный диалог в программе вместо этого)
 
 
 [Languages]
