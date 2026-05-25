@@ -14,7 +14,7 @@
 [Setup]
 ; ВАЖНО: Этот AppId должен быть ОДИНАКОВЫМ во всех версиях!
 ; Именно он говорит Windows что это ТА ЖЕ программа.
-; Никогда не ме��яйте эту строку!
+; Никогда не меняйте эту строку!
 AppId={{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}
 
 AppName={#MyAppName}
@@ -36,8 +36,8 @@ DisableProgramGroupPage=yes
 OutputDir=installer_output
 OutputBaseFilename=PDKopirka_Setup_{#MyAppVersion}
 
-; Иконка установщика
-SetupIconFile=C:\Users\Sotrudnik\PycharmProjects\PDKopirka\logo.ico
+; Иконка установщика (если существует в текущей папке)
+SetupIconFile=logo.ico
 
 ; Иконка в "Установка и удаление программ"
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -50,15 +50,17 @@ SolidCompression=yes
 ; Права администратора (для Program Files)
 PrivilegesRequired=admin
 
-; Автоматически закрыть программу перед обновлением
+; Автоматически закрыть программу перед обновлением БЕЗ ДИАЛОГА
 CloseApplications=yes
 CloseApplicationsFilter=*.exe
 
 ; Перезапустить программу после обновления
 RestartApplications=yes
 
-; Показывать прогресс
+; ПОЛНОСТЬЮ ТИХИЙ РЕЖИМ - не показывать ничего при установке
 ShowLanguageDialog=no
+ShowTasksTreeLines=no
+AlwaysShowComponentsList=no
 
 ; Минимальная версия Windows
 MinVersion=10.0
@@ -66,10 +68,6 @@ MinVersion=10.0
 ; Архитектура
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-
-; УДАЛЕНО: InfoAfterFile=changelog.txt
-; Больше не показываем диалог "Что нового" при установке
-; (используется встроенный диалог в программе вместо этого)
 
 
 [Languages]
@@ -82,15 +80,15 @@ Name: "desktopicon"; Description: "Создать ярлык на рабочем
 
 
 [Files]
-; Копируем ВСЕ файлы из папки сборки PyInstaller
+; Копируем ВСЕ файлы из папки dist/PDKopirka (относительный путь)
 ; ignoreversion — всегда перезаписывать (важно для обновлений!)
-Source: "C:\Users\Sotrudnik\PycharmProjects\PDKopirka\dist\PDKopirka\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "C:\Users\Sotrudnik\PycharmProjects\PDKopirka\logo.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "C:\Users\Sotrudnik\PycharmProjects\PDKopirka\dist\PDKopirka\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\PDKopirka\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "logo.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\PDKopirka\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Если есть другие файлы в корне сборки (dll, pyd и т.д.)
-Source: "C:\Users\Sotrudnik\PycharmProjects\PDKopirka\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "C:\Users\Sotrudnik\PycharmProjects\PDKopirka\*.pyd"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "dist\PDKopirka\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "dist\PDKopirka\*.pyd"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 
 [Icons]
@@ -116,7 +114,7 @@ Type: filesandordirs; Name: "{app}\_internal"
 
 
 [Code]
-// Если программа запущена — предложить закрыть
+// Если программа запущена — предложить закрыть (БЕЗ ДИАЛОГА при /SILENT)
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
@@ -126,18 +124,28 @@ begin
   // Проверяем, запущена ли программа
   if CheckForMutexes('{#MyAppName}_Mutex') then
   begin
-    if MsgBox('{#MyAppName} сейчас запущена.'#13#10#13#10 +
-              'Закрыть программу и продолжить установку?',
-              mbConfirmation, MB_YESNO) = IDYES then
+    // При тихой установке закрываем автоматически без диалога
+    if WizardSilent() then
     begin
-      // Пытаемся закрыть
       Exec('taskkill.exe', '/F /IM {#MyAppExeName}', '',
            SW_HIDE, ewWaitUntilTerminated, ResultCode);
-      Sleep(2000);
+      Sleep(1000);
     end
     else
     begin
-      Result := False;
+      // При обычной установке спрашиваем
+      if MsgBox('{#MyAppName} сейчас запущена.'#13#10#13#10 +
+                'Закрыть программу и продолжить установку?',
+                mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        Exec('taskkill.exe', '/F /IM {#MyAppExeName}', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Sleep(1000);
+      end
+      else
+      begin
+        Result := False;
+      end;
     end;
   end;
 end;
