@@ -87,10 +87,38 @@ def resource_path(relative_path):
 # Автообновление
 # ─────────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "1.0.3"
+def _load_env_file():
+    """Читает .env рядом с exe (сборка) или в папке проекта (разработка)."""
+    if getattr(sys, "frozen", False):
+        bases = [Path(sys.executable).resolve().parent]
+    else:
+        bases = [Path(__file__).resolve().parent, Path.cwd()]
+    for base in bases:
+        env_path = base / ".env"
+        if not env_path.is_file():
+            continue
+        try:
+            for raw in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            pass
+        return
+
+
+_load_env_file()
+
+APP_VERSION = "1.0.7"
+INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
-GITHUB_TOKEN = "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"
+GITHUB_TOKEN = os.environ.get("PDKOPIRKA_GITHUB_TOKEN", "").strip()
 
 
 def _make_ssl_context_certifi():
@@ -146,6 +174,111 @@ def _parse_version(v):
         return (0, 0, 0)
 
 
+def _app_data_dir():
+    appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+    path = Path(appdata) / "PDKopirka"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _read_version_file():
+    if not getattr(sys, "frozen", False):
+        return None
+    version_file = Path(sys.executable).resolve().parent / "version.txt"
+    try:
+        text = version_file.read_text(encoding="utf-8").strip()
+        return text or None
+    except OSError:
+        return None
+
+
+def _read_registry_version():
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    subkey = (
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        f"\\{INNO_APP_ID}_is1"
+    )
+    for root, flags in (
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)),
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_READ | getattr(winreg, "KEY_WOW64_32KEY", 0)),
+        (winreg.HKEY_CURRENT_USER, winreg.KEY_READ),
+    ):
+        try:
+            with winreg.OpenKey(root, subkey, 0, flags) as key:
+                val, _ = winreg.QueryValueEx(key, "DisplayVersion")
+                if val:
+                    return str(val).strip()
+        except OSError:
+            continue
+    return None
+
+
+def get_app_version():
+    """Версия из version.txt / реестра (после установки), иначе константа в коде."""
+    for source in (_read_version_file, _read_registry_version):
+        ver = source()
+        if ver:
+            return ver
+    return APP_VERSION
+
+
+def _update_settings_path():
+    return _app_data_dir() / "update_settings.json"
+
+
+def _load_update_settings():
+    path = _update_settings_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_update_settings(data):
+    path = _update_settings_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _mark_update_attempt(latest_tag):
+    settings = _load_update_settings()
+    latest_norm = str(latest_tag).lstrip("v").strip()
+    settings["last_attempt_version"] = latest_norm
+    settings["last_attempt_at"] = datetime.now().isoformat()
+    _save_update_settings(settings)
+
+
+def _clear_update_settings_if_current():
+    current = _parse_version(get_app_version())
+    settings = _load_update_settings()
+    changed = False
+    attempt = settings.get("last_attempt_version")
+    if attempt and current >= _parse_version(attempt):
+        settings.pop("last_attempt_version", None)
+        settings.pop("last_attempt_at", None)
+        changed = True
+    if changed:
+        _save_update_settings(settings)
+
+
+def _create_single_instance_mutex():
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW(None, False, "PDKopirka_Mutex")
+    except Exception:
+        pass
+
+
 def check_for_update():
     """Ищет установщик (.exe) в последнем релизе."""
     try:
@@ -159,7 +292,8 @@ def check_for_update():
         latest_tag = data.get("tag_name", "")
         if not latest_tag:
             return False, None, None, "GitHub вернул пустой tag_name."
-        if _parse_version(latest_tag) <= _parse_version(APP_VERSION):
+        current = get_app_version()
+        if _parse_version(latest_tag) <= _parse_version(current):
             return False, None, None, None
         assets = data.get("assets", [])
         download_url = None
@@ -273,16 +407,18 @@ def apply_update_and_restart(installer_path, latest_version="new"):
         return
 
     try:
-        # /SILENT              - без диалогов, но с прогресс-баром
+        # /VERYSILENT          - полностью без окон (в отличие от /SILENT)
         # /SUPPRESSMSGBOXES    - без предупреждений
+        # /SP-                 - без заставки установщика
         # /NORESTART           - не перезагружать ПК
         # /CLOSEAPPLICATIONS   - закрыть запущенную программу
         # /RESTARTAPPLICATIONS - запустить после установки
         subprocess.Popen(
             [
                 installer_path,
-                "/SILENT",
+                "/VERYSILENT",
                 "/SUPPRESSMSGBOXES",
+                "/SP-",
                 "/NORESTART",
                 "/CLOSEAPPLICATIONS",
                 "/RESTARTAPPLICATIONS",
@@ -398,49 +534,27 @@ class UpdateDialog(QDialog):
 # ─────────────────────────────────────────────────────────────────────────────
 
 CHANGELOG_HTML = """
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.5</h2>
+<h2 style="color:#0066cc; margin-bottom:10px;">Версия 1.0.0</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     🔄 Полностью переработанное обновление
 </h3>
 <ul>
-    <li>📦 <b>Папочная сборка</b> — программа теперь устанавливается в папку</li>
-    <li>✅ <b>Обновление работает на 100%</b> — заменяется только содержимое, EXE не блокируется</li>
-    <li>⚡ <b>Мгновенный запуск</b> — больше нет распаковки при старте</li>
-    <li>🛡️ <b>Меньше ложных срабатываний антивируса</b></li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🎨 Улучшено определение цветности
-</h3>
-<ul>
-    <li>🎨 Теперь распознаются страницы со <b>светло-цветными фонами</b></li>
-    <li>🌈 Лучше определяются пастельные оттенки и градиенты</li>
-</ul>
-
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.4</h2>
-<ul>
-    <li>🖥️ Принудительная светлая тема для Windows 11</li>
-    <li>🎯 Стиль Fusion для стабильного отображения</li>
-</ul>
-
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.3</h2>
-<ul>
-    <li>💾 Кнопка «Сохранить в TXT» в детализации</li>
-    <li>✂️ Компактные номера страниц</li>
-</ul>
-
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.2</h2>
-<ul>
-    <li>💾 <b>История расчётов</b></li>
-    <li>📚 Вкладка «История»</li>
-</ul>
-
-<h2 style="color:#0066cc; margin-bottom:10px;">🚀 Версия 1.0.1</h2>
-<ul>
-    <li>📐 Справочник форматов</li>
-    <li>✂️ Блок «Резка»</li>
-    <li>🌀 Учёт рулонных страниц при фальцовке</li>
+    <li>Папочная сборка — программа теперь устанавливается в папку</li>
+    <li>Обновление работает на 100% — заменяется только содержимое, EXE не блокируется</li>
+    <li>Мгновенный запуск — больше нет распаковки при старте</li>
+    <li>Меньше ложных срабатываний антивируса</b></li>
+    <li>Теперь распознаются страницы со <b>светло-цветными фонами</b></li>
+    <li>Лучше определяются пастельные оттенки и градиенты</li>
+    <li> Принудительная светлая тема для Windows 11</li>
+    <li>Стиль Fusion для стабильного отображения</li>
+    <li>Кнопка «Сохранить в TXT» в детализации</li>
+    <li> Компактные номера страниц</li>
+    <li><b>История расчётов</b></li>
+    <li>Вкладка «История»</li>
+    <li>Справочник форматов</li>
+    <li> Блок «Резка»</li>
+    <li>Учёт рулонных страниц при фальцовке</li>
 </ul>
 """
 
@@ -597,12 +711,6 @@ CUTTING_FORMATS = {
 # Лицензия
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _h(s):
-    return hashlib.sha256(s.encode()).hexdigest()
-
-_VL = _h("admin")
-_VP = _h("1qwer432")
-
 LICENSE_CHECK_URL = (
     "https://gist.githubusercontent.com/fabilya/"
     "d460ac938145cd8d99f261c250f90255/raw/gistfile1.txt"
@@ -676,100 +784,6 @@ def check_remote_license():
 class NoScrollSpinBox(QSpinBox):
     def wheelEvent(self, event):
         event.ignore()
-
-
-class LoginDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Авторизация")
-        self.setFixedSize(400, 280)
-        self.setModal(True)
-        self.authenticated = False
-        self.setWindowFlags(
-            self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint
-        )
-        self._build_ui()
-
-    def _build_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setSpacing(15)
-        lay.setContentsMargins(30, 30, 30, 30)
-        t = QLabel("🔐 Вход в систему")
-        t.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        t.setStyleSheet("color: #0066cc; background: transparent;")
-        lay.addWidget(t)
-        s = QLabel("Калькулятор расчёта проектной документации")
-        s.setFont(QFont("Arial", 10))
-        s.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        s.setStyleSheet("color: #666; background: transparent;")
-        lay.addWidget(s)
-        lay.addSpacing(10)
-        ist = (
-            "QLineEdit { background-color: white; border: 2px solid #ccc; "
-            "border-radius: 6px; padding: 6px 12px; color: #333; } "
-            "QLineEdit:focus { border: 2px solid #0066cc; }"
-        )
-        self.edit_login = QLineEdit()
-        self.edit_login.setPlaceholderText("Логин")
-        self.edit_login.setFont(QFont("Arial", 11))
-        self.edit_login.setMinimumHeight(36)
-        self.edit_login.setStyleSheet(ist)
-        lay.addWidget(self.edit_login)
-        self.edit_password = QLineEdit()
-        self.edit_password.setPlaceholderText("Пароль")
-        self.edit_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.edit_password.setFont(QFont("Arial", 11))
-        self.edit_password.setMinimumHeight(36)
-        self.edit_password.setStyleSheet(ist)
-        self.edit_password.returnPressed.connect(self._try_login)
-        lay.addWidget(self.edit_password)
-        self.lbl_error = QLabel("")
-        self.lbl_error.setStyleSheet(
-            "color: red; font-size: 11px; background: transparent;"
-        )
-        self.lbl_error.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self.lbl_error)
-        b = QPushButton("Войти")
-        b.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        b.setMinimumHeight(40)
-        b.setStyleSheet(
-            "QPushButton { background-color: #0066cc; color: white; "
-            "border: none; border-radius: 6px; font-weight: bold; } "
-            "QPushButton:hover { background-color: #0052a3; }"
-        )
-        b.clicked.connect(self._try_login)
-        lay.addWidget(b)
-        be = QPushButton("Выход")
-        be.setFont(QFont("Arial", 10))
-        be.setMinimumHeight(32)
-        be.setStyleSheet(
-            "QPushButton { background-color: #999; color: white; "
-            "border: none; border-radius: 6px; } "
-            "QPushButton:hover { background-color: #777; }"
-        )
-        be.clicked.connect(self._exit_app)
-        lay.addWidget(be)
-        self.setStyleSheet("QDialog { background-color: #f5f6f7; color: #333; }")
-
-    def _try_login(self):
-        if _h(self.edit_login.text().strip().lower()) == _VL and \
-           _h(self.edit_password.text().strip()) == _VP:
-            self.authenticated = True
-            self.accept()
-        else:
-            self.lbl_error.setText("❌ Неверный логин или пароль")
-            self.edit_password.clear()
-            self.edit_password.setFocus()
-
-    def _exit_app(self):
-        self.authenticated = False
-        self.reject()
-
-    def closeEvent(self, event):
-        if not self.authenticated:
-            self.reject()
-        super().closeEvent(event)
 
 
 def compact_page_list(pages):
@@ -1266,7 +1280,7 @@ class PrintingCalculator(QMainWindow):
         lb=QLabel(text); lb.setFont(QFont("Arial",size,QFont.Weight.Bold)); lb.setStyleSheet(f"color:{self.text_color};background:transparent;"); return lb
 
     def show_whats_new(self):
-        WhatsNewDialog(APP_VERSION, parent=self).exec()
+        WhatsNewDialog(get_app_version(), parent=self).exec()
 
     def create_input_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(15); lay.setContentsMargins(20,20,20,20)
@@ -1305,7 +1319,7 @@ class PrintingCalculator(QMainWindow):
         links_layout=QHBoxLayout(); links_layout.setContentsMargins(0,5,0,0); links_layout.setSpacing(10)
         lbl_thx=QLabel('⭐ <a href="https://kopirkaru.bitrix24.ru/company/personal/user/423876/" style="color:#0066cc;text-decoration:none;">Оставить благодарность в Bitrix</a>')
         lbl_thx.setFont(QFont("Arial",9)); lbl_thx.setStyleSheet("background:transparent;border:none;color:#333;"); lbl_thx.setOpenExternalLinks(True); links_layout.addWidget(lbl_thx); links_layout.addStretch()
-        btn_whats_new=QPushButton(f"🎉 Что нового (v{APP_VERSION})"); btn_whats_new.setFont(QFont("Arial",9)); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_whats_new=QPushButton(f"🎉 Что нового (v{get_app_version()})"); btn_whats_new.setFont(QFont("Arial",9)); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_whats_new.setStyleSheet("QPushButton{background-color:transparent;color:#0066cc;border:1px solid #0066cc;border-radius:4px;padding:4px 10px;font-weight:normal;}QPushButton:hover{background-color:#0066cc;color:white;}")
         btn_whats_new.clicked.connect(self.show_whats_new); links_layout.addWidget(btn_whats_new); links_layout.addStretch()
         lbl_bug=QLabel('🐛 Сообщить об ошибке: ilya.fabiyanskiy@yandex.ru'); lbl_bug.setFont(QFont("Arial",9))
@@ -1427,7 +1441,7 @@ class PrintingCalculator(QMainWindow):
                 if base.lower().endswith(".pdf"): base=os.path.splitext(base)[0]
                 name=base or "Расчёт"
             else: name="Расчёт"
-            calc_data={'version':1,'app_version':APP_VERSION,'saved_at':datetime.now().isoformat(),'name':name,
+            calc_data={'version':1,'app_version':get_app_version(),'saved_at':datetime.now().isoformat(),'name':name,
                 'source':{'path':self.selected_path,'files_count':len(self.file_page_counts),'total_pages':self.total_source},
                 'params':{'copies':self.copies,'force_bw':self.force_bw,
                     'folding':('A4' if self.need_folding_a4 else ('A3' if self.need_folding_a3 else None)),
@@ -1796,37 +1810,17 @@ def main():
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    # 1. Лицензия
-    ok, msg = check_remote_license()
-    if not ok:
-        QMessageBox.critical(None, "Доступ запрещён", msg)
-        sys.exit(1)
+    _create_single_instance_mutex()
 
-    # 2. Обновление (только в frozen / exe режиме)
+    # Обновление без запроса (только в exe)
     if getattr(sys, "frozen", False):
-        has_update, latest_ver, dl_url, upd_err = check_for_update()
-        if upd_err:
-            QMessageBox.warning(
-                None, "Проверка обновлений",
-                f"Не удалось проверить наличие обновлений.\n\n{upd_err}"
-            )
-        elif has_update:
-            ans = QMessageBox.question(
-                None,
-                "Доступно обновление",
-                f"Доступна новая версия {latest_ver}.\n\nОбновить сейчас?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
-            )
-            if ans == QMessageBox.StandardButton.Yes:
-                UpdateDialog(latest_ver, dl_url).exec()
+        _clear_update_settings_if_current()
+        has_update, latest_ver, dl_url, _upd_err = check_for_update()
+        if has_update:
+            _mark_update_attempt(latest_ver)
+            UpdateDialog(latest_ver, dl_url).exec()
 
-    # 3. Авторизация
-    dlg = LoginDialog()
-    if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.authenticated:
-        sys.exit(0)
-
-    # 4. Главное окно
+    # Главное окно
     window = PrintingCalculator()
     window.show()
     sys.exit(app.exec())
