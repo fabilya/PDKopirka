@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QProgressBar, QFrame,
     QScrollArea, QDialog, QLineEdit, QMessageBox, QGroupBox,
-    QRadioButton, QButtonGroup, QSizePolicy, QHeaderView
+    QRadioButton, QButtonGroup, QSizePolicy, QHeaderView, QGridLayout
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
@@ -284,6 +284,96 @@ def _create_single_instance_mutex():
         import ctypes
         kernel32 = ctypes.windll.kernel32
         kernel32.CreateMutexW(None, False, "PDKopirka_Mutex")
+    except Exception:
+        pass
+
+
+def flash_taskbar_icon(window, count=0):
+    """
+    Мигает иконкой программы в панели задач Windows.
+    count=0 — мигать пока пользователь не переключится на окно.
+    count=N — мигнуть N раз.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        FLASHW_STOP = 0
+        FLASHW_CAPTION = 0x00000001
+        FLASHW_TRAY = 0x00000002
+        FLASHW_ALL = FLASHW_CAPTION | FLASHW_TRAY
+        FLASHW_TIMER = 0x00000004
+        FLASHW_TIMERNOFG = 0x0000000C  # мигать пока окно не получит фокус
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+
+        hwnd = int(window.winId())
+        flags = FLASHW_ALL | (FLASHW_TIMERNOFG if count == 0 else 0)
+        info = FLASHWINFO(
+            cbSize=ctypes.sizeof(FLASHWINFO),
+            hwnd=hwnd,
+            dwFlags=flags,
+            uCount=count if count > 0 else 0,
+            dwTimeout=0,
+        )
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+    except Exception:
+        pass
+
+
+def stop_flash_taskbar(window):
+    """Останавливает мигание иконки."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        FLASHW_STOP = 0
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+
+        hwnd = int(window.winId())
+        info = FLASHWINFO(
+            cbSize=ctypes.sizeof(FLASHWINFO),
+            hwnd=hwnd,
+            dwFlags=FLASHW_STOP,
+            uCount=0,
+            dwTimeout=0,
+        )
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+    except Exception:
+        pass
+
+
+def bring_window_to_front(window):
+    """
+    «Безопасный» подъём окна наверх — Windows не даёт переключать активное
+    приложение насильно, но это работает в большинстве случаев.
+    """
+    try:
+        window.setWindowState(
+            (window.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
+        window.raise_()
+        window.activateWindow()
     except Exception:
         pass
 
@@ -692,15 +782,33 @@ ISO_A = {
     "A4": (210, 297), "A3": (297, 420), "A2": (420, 594),
     "A1": (594, 841), "A0": (841, 1189),
 }
+# Расширенные форматы из справочника (размеры как в панели «Форматы»)
 ISO_A_NONSTANDARD = {
-    "A4x3": (297, 630), "A4x4": (297, 841), "A4x5": (297, 1051),
-    "A4x6": (297, 1261), "A4x7": (297, 1471), "A4x8": (297, 1682),
-    "A4x9": (297, 1892),
-    "A3x3": (420, 891), "A3x4": (420, 1189), "A3x5": (420, 1486),
-    "A3x6": (420, 1783), "A3x7": (420, 2080),
-    "A2x3": (594, 1261), "A2x4": (594, 1682), "A2x5": (594, 2102),
-    "A1x3": (841, 1783), "A1x4": (841, 2378),
+    "A4x3": (297, 630), "A4x4": (297, 840), "A4x5": (297, 1050),
+    "A4x6": (297, 1260), "A4x7": (297, 1470), "A4x8": (297, 1680), "A4x9": (297, 1890),
+    "A3x3": (420, 891), "A3x4": (420, 1188), "A3x5": (420, 1485),
+    "A3x6": (420, 1782), "A3x7": (420, 2079), "A3x8": (420, 2376), "A3x9": (420, 2673),
+    "A2x3": (594, 1260), "A2x4": (594, 1680), "A2x5": (594, 2100),
+    "A2x6": (594, 2520), "A2x7": (594, 2940), "A2x8": (594, 3360), "A2x9": (594, 3780),
+    "A1x3": (841, 1782), "A1x4": (841, 2376), "A1x5": (841, 2970),
+    "A1x6": (841, 3564), "A1x7": (841, 4158), "A1x8": (841, 4752), "A1x9": (841, 5346),
 }
+
+UNPRINTABLE_FORMATS = frozenset({
+    "A0x2", "A0x3", "A0x4", "A0x5", "A0x6", "A0x7", "A0x8", "A0x9",
+})
+# Номинальные размеры A0×N (нельзя печатать) и ближайшие печатаемые (справочник)
+A0_OVERSIZE_MM = {
+    "A0x2": (1189, 1682), "A0x3": (1189, 2523), "A0x4": (1189, 3364),
+    "A0x5": (1189, 4205), "A0x6": (1189, 5046), "A0x7": (1189, 5887),
+    "A0x8": (1189, 6728), "A0x9": (1189, 7569),
+}
+A0_PRINTABLE_MM = {
+    "A0x2": (910, 1287), "A0x3": (910, 1930), "A0x4": (910, 2575),
+    "A0x5": (910, 3218), "A0x6": (910, 3862), "A0x7": (910, 4505),
+    "A0x8": (910, 5150), "A0x9": (910, 5793),
+}
+PRINTABLE_A0_SIZE_NAMES = {wh: f"{wh[0]}×{wh[1]}" for wh in A0_PRINTABLE_MM.values()}
 CONVERSION_RULES = {
     "A4x3": ("A1", 2), "A4x4": ("A1", 2),
     "A3x3": ("A0", 2), "A3x4": ("A0", 2),
@@ -715,6 +823,46 @@ CUTTING_FORMATS = {
     "A4x3", "A4x5", "A4x6", "A4x7", "A4x8", "A4x9",
     "A3x3", "A3x4", "A3x5", "A3x6", "A3x7", "A3x8", "A3x9",
 }
+
+def _norm_format_key(s):
+    return str(s).upper().replace("А", "A").replace("Х", "X").replace(" ", "")
+
+
+def resolve_format_name(raw):
+    """Имя формата из справочника по вводу пользователя."""
+    key = _norm_format_key(raw)
+    for name in list(ISO_A.keys()) + list(ISO_A_NONSTANDARD.keys()):
+        if _norm_format_key(name) == key:
+            return name
+    for size_name in PRINTABLE_A0_SIZE_NAMES.values():
+        if _norm_format_key(size_name) == key:
+            return size_name
+    return key
+
+
+def format_dimensions_mm(name):
+    """Размер формата в мм или None."""
+    if name in ISO_A:
+        return ISO_A[name]
+    if name in ISO_A_NONSTANDARD:
+        return ISO_A_NONSTANDARD[name]
+    for wh, label in PRINTABLE_A0_SIZE_NAMES.items():
+        if label == name:
+            return wh
+    return None
+
+
+def page_size_mm(page):
+    """
+    Размер листа в мм (меньшая × большая сторона).
+
+    В PDF из AutoCAD/CAD MediaBox часто огромный (например 2000×2000 мм),
+    а реальный формат листа — в CropBox / page.rect (видимая область).
+    """
+    r = page.rect
+    w = round(r.width * 25.4 / 72, 1)
+    h = round(r.height * 25.4 / 72, 1)
+    return tuple(sorted((w, h)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -840,144 +988,251 @@ def compact_page_list(pages):
 # Выдвижная панель подсказки форматов
 # ─────────────────────────────────────────────────────────────────────────────
 
-class FormatHintPanel(QFrame):
-    def __init__(self, parent=None):
+def _format_hint_style(name):
+    if name in UNPRINTABLE_FORMATS:
+        return "#888888", "Не печатаем"
+    if name in PRINTABLE_A0_SIZE_NAMES.values():
+        return "#2e7d32", "Ближайший формат"
+    if name in CUTTING_FORMATS:
+        return "#1565c0", "С учетом резки"
+    return "#2e7d32", "Без резки"
+
+
+def _format_legend_html():
+    return (
+        '<span style="color:#2e7d32;font-size:12px;">●</span> Без резки &nbsp;&nbsp; '
+        '<span style="color:#1565c0;font-size:12px;">●</span> С учетом резки &nbsp;&nbsp; '
+        '<span style="color:#ff0000;font-size:12px;">●</span> Не печатаем &nbsp;&nbsp; '
+        '<span style="color:#2e7d32;font-size:12px;">●</span> Ближайший формат'
+    )
+
+
+# Столбцы справочника (блоки 1–4)
+_FORMAT_COL_A4 = ["A4"] + [f"A4x{i}" for i in range(3, 10)]
+_FORMAT_COL_A3 = ["A3"] + [f"A3x{i}" for i in range(3, 10)]
+_FORMAT_COL_A2 = ["A2"] + [f"A2x{i}" for i in range(3, 10)]
+_FORMAT_COL_A1 = ["A1"] + [f"A1x{i}" for i in range(3, 10)]
+_A0_OVERSIZE_ORDER = [f"A0x{i}" for i in range(2, 10)]
+
+
+class A0NearestFormatRow(QFrame):
+    """Строка A0×N: номинал (серый) → печатаемый размер (зелёный), клик — ближайший формат."""
+
+    def __init__(self, key, on_format_click, parent=None):
         super().__init__(parent)
-        self._expanded = False
-        self._panel_width = 520
-        self._btn_width = 28
+        self._fmt_name = PRINTABLE_A0_SIZE_NAMES[A0_PRINTABLE_MM[key]]
+        self._on_format_click = on_format_click
+        ow, oh = A0_OVERSIZE_MM[key]
+        pw, ph = A0_PRINTABLE_MM[key]
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(
+            "A0NearestFormatRow { background: white; border: 1px solid #ccc; border-radius: 4px; }"
+            "A0NearestFormatRow:hover { background: #e8f4ff; border-color: #2e7d32; }"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
+        title = QLabel(key)
+        title.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+        title.setStyleSheet("color: #333; background: transparent; border: none;")
+        line = QLabel(
+            f'<span style="color:#c62828;">{ow}×{oh}</span>'
+            f' → <span style="color:#2e7d32;">{pw}×{ph}</span>'
+        )
+        line.setTextFormat(Qt.TextFormat.RichText)
+        line.setFont(QFont("Arial", 8))
+        line.setStyleSheet("background: transparent; border: none;")
+        lay.addWidget(title)
+        lay.addWidget(line)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._on_format_click:
+            self._on_format_click(self._fmt_name)
+        super().mouseReleaseEvent(event)
+
+
+class FormatHintPanel(QFrame):
+    """Справочник форматов (5 блоков); клик вызывает on_format_click(name)."""
+
+    # Высота одной строки в колонке (одинаковая для всех типов ячеек)
+    _ROW_HEIGHT = 44
+    # Количество строк в колонке (1 базовый + 7 расширенных)
+    _ROWS_COUNT = 8
+
+    def __init__(self, parent=None, on_format_click=None):
+        super().__init__(parent)
+        self._on_format_click = on_format_click
+        self._panel_width = 580
         self.setStyleSheet(
             "FormatHintPanel { background-color: #f9f9f9; "
             "border: 2px solid #0066cc; border-radius: 8px; color: #333; }"
         )
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        self.btn_toggle = QPushButton("◀\n📐\nФ\nо\nр\nм\nа\nт\nы")
-        self.btn_toggle.setFixedWidth(self._btn_width)
-        self.btn_toggle.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
-        )
-        self.btn_toggle.setStyleSheet(
-            "QPushButton { background-color: #0066cc; color: white; border: none; "
-            "border-radius: 4px; font-size: 11px; font-weight: bold; padding: 4px 2px; } "
-            "QPushButton:hover { background-color: #0052a3; }"
-        )
-        self.btn_toggle.clicked.connect(self.toggle)
-        root.addWidget(self.btn_toggle)
-        self.content = QWidget()
-        self.content.setFixedWidth(self._panel_width - self._btn_width)
-        self.content.setVisible(False)
-        cl = QVBoxLayout(self.content)
+        self.setFixedWidth(self._panel_width)
+        cl = QVBoxLayout(self)
         cl.setContentsMargins(8, 8, 8, 8)
-        cl.setSpacing(4)
-        title = QLabel("📐 Справочник форматов")
-        title.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        cl.setSpacing(6)
+
+        title = QLabel("📐 Справочник форматов\n(нажмите на формат)")
+        title.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: #0066cc; background: transparent; border: none;")
         cl.addWidget(title)
-        legend = QLabel(
-            '<span style="color:#2e7d32;">● Без резки</span> &nbsp;&nbsp; '
-            '<span style="color:#1565c0;">● Нужна резка</span> &nbsp;&nbsp; '
-            '<span style="color:#c62828;">● Нет возможности печати</span>'
-        )
+
+        legend = QLabel(_format_legend_html())
+        legend.setTextFormat(Qt.TextFormat.RichText)
         legend.setFont(QFont("Arial", 8))
         legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        legend.setStyleSheet("background: transparent; border: none; padding: 2px; color: #333;")
+        legend.setStyleSheet("color: #333; background: transparent; border: none;")
         legend.setWordWrap(True)
         cl.addWidget(legend)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        fw = QWidget()
-        fw.setStyleSheet("background: transparent; color: #333;")
-        fl = QVBoxLayout(fw)
-        fl.setContentsMargins(4, 4, 4, 4)
-        fl.setSpacing(2)
-        self._fmt_label = QLabel(self._build_formats_html())
-        self._fmt_label.setFont(QFont("Consolas", 9))
-        self._fmt_label.setWordWrap(True)
-        self._fmt_label.setTextFormat(Qt.TextFormat.RichText)
-        self._fmt_label.setStyleSheet("background: transparent; border: none; padding: 4px; color: #333;")
-        fl.addWidget(self._fmt_label)
-        fl.addStretch()
-        scroll.setWidget(fw)
-        cl.addWidget(scroll)
-        root.addWidget(self.content)
-        self.setFixedWidth(self._btn_width)
+        scroll.setStyleSheet(
+            "QScrollArea { border: 1px solid #ddd; background: white; }"
+        )
+        inner = QWidget()
+        inner.setStyleSheet("background: white;")
+        root = QHBoxLayout(inner)
+        root.setSpacing(4)
+        root.setContentsMargins(4, 4, 4, 4)
 
-    def _get_format_color(self, name):
-        red = {"A0x2", "A0x3", "A0x4", "A0x5", "A0x6", "A0x7", "A0x8", "A0x9"}
-        if name in red:
-            return "#c62828", "Нет возможности распечатать такой формат"
-        if name in CUTTING_FORMATS:
-            return "#1565c0", "Нужна резка"
-        return "#2e7d32", "Без резки"
+        root.addWidget(self._make_column_block(_FORMAT_COL_A4), stretch=1)
+        root.addWidget(self._make_column_block(_FORMAT_COL_A3), stretch=1)
+        root.addWidget(self._make_column_block(_FORMAT_COL_A2), stretch=1)
+        root.addWidget(self._make_column_block(_FORMAT_COL_A1), stretch=1)
+        root.addWidget(self._make_a0_column(), stretch=1)
 
-    def _fmt_span(self, name, size_str, bracket_str=None):
-        color, tip = self._get_format_color(name)
-        s = f'<span style="color:{color};" title="{tip}">{name} — {size_str}</span>'
-        if bracket_str:
-            s += (
-                f' <span style="color:#2e7d32;font-weight:bold;" '
-                f'title="Такой формат мы можем распечатать">({bracket_str})</span>'
+        scroll.setWidget(inner)
+        cl.addWidget(scroll, stretch=1)
+
+    def _btn_style(self, color, enabled=True):
+        if not enabled:
+            return (
+                f"QPushButton {{ color: {color}; background: #fafafa; "
+                f"border: 1px solid #ddd; border-radius: 4px; "
+                f"padding: 2px 4px; text-align: center; }}"
             )
-        return s
+        return (
+            f"QPushButton {{ color: {color}; background: white; "
+            f"border: 1px solid #ccc; border-radius: 4px; "
+            f"padding: 2px 4px; text-align: center; }}"
+            f"QPushButton:hover {{ background: #e8f4ff; border-color: {color}; }}"
+        )
 
-    def _build_formats_html(self):
-        lines = []
-        def table_start():
-            lines.append('<table cellspacing="0" cellpadding="2" style="border:none;background:transparent;">')
-        def table_end():
-            lines.append('</table>')
-        def hr():
-            lines.append('<hr style="border:1px solid #ccc;">')
-        a4 = [("A4","210×297 мм"),("A4x3","297×630 мм"),("A4x4","297×840 мм"),("A4x5","297×1050 мм"),
-              ("A4x6","297×1260 мм"),("A4x7","297×1470 мм"),("A4x8","297×1680 мм"),("A4x9","297×1890 мм")]
-        a3 = [("A3","297×420 мм"),("A3x3","420×891 мм"),("A3x4","420×1188 мм"),("A3x5","420×1485 мм"),
-              ("A3x6","420×1782 мм"),("A3x7","420×2079 мм"),("A3x8","420×2376 мм"),("A3x9","420×2673 мм")]
-        table_start()
-        for i in range(max(len(a4),len(a3))):
-            l = self._fmt_span(*a4[i]) if i<len(a4) else ""
-            r = self._fmt_span(*a3[i]) if i<len(a3) else ""
-            lines.append(f'<tr><td style="padding-right:20px;border:none;">{l}</td><td style="border:none;">{r}</td></tr>')
-        table_end(); hr()
-        a2 = [("A2","420×594 мм"),("A2x3","594×1260 мм"),("A2x4","594×1680 мм"),("A2x5","594×2100 мм"),
-              ("A2x6","594×2520 мм"),("A2x7","594×2940 мм"),("A2x8","594×3360 мм"),("A2x9","594×3780 мм")]
-        a1 = [("A1","594×841 мм"),("A1x3","841×1782 мм"),("A1x4","841×2376 мм"),("A1x5","841×2970 мм"),
-              ("A1x6","841×3564 мм"),("A1x7","841×4158 мм"),("A1x8","841×4752 мм"),("A1x9","841×5346 мм")]
-        table_start()
-        for i in range(max(len(a2),len(a1))):
-            l = self._fmt_span(*a2[i]) if i<len(a2) else ""
-            r = self._fmt_span(*a1[i]) if i<len(a1) else ""
-            lines.append(f'<tr><td style="padding-right:20px;border:none;">{l}</td><td style="border:none;">{r}</td></tr>')
-        table_end(); hr()
-        a0 = [("A0","841×1189 мм",None),("A0x2","1189×1682 мм","910×1287 мм"),("A0x3","1189×2523 мм","910×1930 мм"),
-              ("A0x4","1189×3364 мм","910×2575 мм"),("A0x5","1189×4205 мм","910×3218 мм"),("A0x6","1189×5046 мм","910×3862 мм"),
-              ("A0x7","1189×5887 мм","910×4505 мм"),("A0x8","1189×6728 мм","910×5150 мм"),("A0x9","1189×7569 мм","910×5793 мм")]
-        table_start()
-        for name,size,bracket in a0:
-            c = self._fmt_span(name,size,bracket)
-            lines.append(f'<tr><td colspan="2" style="border:none;">{c}</td></tr>')
-        table_end()
-        return "\n".join(lines)
-
-    def eventFilter(self, obj, event):
-        return super().eventFilter(obj, event)
-
-    def toggle(self):
-        if self._expanded:
-            self.content.setVisible(False)
-            self.setFixedWidth(self._btn_width)
-            self.btn_toggle.setText("◀\n📐\nФ\nо\nр\nм\nа\nт\nы")
+    def _make_format_button(self, name, label=None, color=None, tip=None,
+                             enabled=True, fmt_name=None):
+        fmt_name = fmt_name or name
+        if color is None:
+            color, tip = _format_hint_style(fmt_name)
+        btn = QPushButton(label or name)
+        btn.setFont(QFont("Arial", 7))
+        btn.setToolTip(tip or "")
+        btn.setFixedHeight(self._ROW_HEIGHT)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setStyleSheet(self._btn_style(color, enabled))
+        if enabled and self._on_format_click:
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _c=False, n=fmt_name: self._on_format_click(n))
         else:
-            self.content.setVisible(True)
-            self.setFixedWidth(self._panel_width)
-            self.btn_toggle.setText("▶\n📐\nФ\nо\nр\nм\nа\nт\nы")
-        self._expanded = not self._expanded
-        p = self.parent()
-        if p and hasattr(p, '_reposition_hint'):
-            p._reposition_hint()
+            btn.setEnabled(False)
+        return btn
+
+    def _make_filler(self):
+        """Невидимая ячейка той же высоты, чтобы выровнять колонки."""
+        filler = QWidget()
+        filler.setFixedHeight(self._ROW_HEIGHT)
+        filler.setStyleSheet("background: transparent; border: none;")
+        return filler
+
+    def _make_column_block(self, format_names):
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: #fafafa; border: 1px solid #ccc; "
+            "border-radius: 6px; }"
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
+        for name in format_names:
+            wh = format_dimensions_mm(name)
+            if not wh:
+                continue
+            w, h = wh
+            lay.addWidget(self._make_format_button(name, f"{name}\n{w}×{h}"))
+        # Добавляем пустые ячейки, чтобы колонка имела ту же высоту,
+        # что и самая длинная (A0)
+        rows_added = len(format_names)
+        for _ in range(self._ROWS_COUNT - rows_added):
+            lay.addWidget(self._make_filler())
+        return frame
+
+    def _make_a0_column(self):
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: #fafafa; border: 1px solid #ccc; "
+            "border-radius: 6px; }"
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(2)
+
+        # A0 — стандартный
+        w0, h0 = ISO_A["A0"]
+        lay.addWidget(self._make_format_button("A0", f"A0\n{w0}×{h0}"))
+
+        # A0x2..A0x8 — не печатаем, показываем ближайший
+        for key in _A0_OVERSIZE_ORDER[:7]:  # без A0x9
+            lay.addWidget(self._make_a0_row(key))
+
+        return frame
+
+    def _make_a0_row(self, key):
+        """Строка A0×N: название (зелёное) + (красный номинал) (зелёный печатаемый)."""
+        ow, oh = A0_OVERSIZE_MM[key]
+        pw, ph = A0_PRINTABLE_MM[key]
+        fmt_name = PRINTABLE_A0_SIZE_NAMES[A0_PRINTABLE_MM[key]]
+
+        frame = QFrame()
+        frame.setCursor(Qt.CursorShape.PointingHandCursor)
+        frame.setFixedHeight(self._ROW_HEIGHT)
+        frame.setStyleSheet(
+            "QFrame { background: white; border: 1px solid #ccc; "
+            "border-radius: 4px; }"
+            "QFrame:hover { background: #e8f4ff; border-color: #2e7d32; }"
+        )
+
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(0)
+
+        title = QLabel(key)
+        title.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            "color: #2e7d32; background: transparent; border: none;"
+        )
+
+        sizes = QLabel(
+            f'<span style="color:#c62828;font-weight:bold;">{ow}×{oh}</span>'
+            f'<span style="color:#555;"> </span>'
+            f'<span style="color:#2e7d32;font-weight:bold;">({pw}×{ph})</span>'
+        )
+        sizes.setTextFormat(Qt.TextFormat.RichText)
+        sizes.setFont(QFont("Arial", 7, QFont.Weight.Bold))
+        sizes.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sizes.setStyleSheet("background: transparent; border: none;")
+
+        lay.addWidget(title)
+        lay.addWidget(sizes)
+
+        def on_click(event):
+            if (event.button() == Qt.MouseButton.LeftButton
+                    and self._on_format_click):
+                self._on_format_click(fmt_name)
+
+        frame.mousePressEvent = on_click
+        return frame
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -990,7 +1245,25 @@ class UnknownFormatDialog(QDialog):
         self.w, self.h, self.color = w, h, color
         self.pages, self.pdf_path = pages, pdf_path
         self.result_action = self.result_value = self._temp_file = None
+        self._overlay = None
+        self._parent_window = parent
+        if parent is not None:
+            self._overlay = ModalOverlay(parent)
+            self._overlay.show()
+            self._overlay.raise_()
         self._build_ui()
+        # После показа диалога — привлекаем внимание пользователя
+        QTimer.singleShot(0, self._attract_attention)
+
+    def _attract_attention(self):
+        """Подсвечивает программу в панели задач и поднимает окно наверх."""
+        target = self._parent_window or self
+        # Поднимаем главное окно (с ним поднимется и диалог)
+        bring_window_to_front(target)
+        # Мигаем иконкой в трее, пока пользователь не переключится
+        flash_taskbar_icon(target, count=0)
+        # Поднимаем сам диалог поверх главного окна
+        bring_window_to_front(self)
 
     def _build_ui(self):
         cs = "цвет" if self.color else "ч/б"
@@ -1029,7 +1302,8 @@ class UnknownFormatDialog(QDialog):
         self.edit_format.setFont(QFont("Arial",10))
         self.edit_format.setStyleSheet("QLineEdit{color:#333;background:white;border:1px solid #ccc;}")
         fl.addWidget(self.edit_format)
-        bf = QPushButton("Применить формат"); bf.setFixedWidth(160); bf.clicked.connect(self._apply_format)
+        bf = QPushButton("Применить формат"); bf.setFixedWidth(160)
+        bf.clicked.connect(lambda: self._apply_format())
         fl.addWidget(bf)
         root.addWidget(fb)
         rb = QGroupBox("Вариант 2 — рулонная печать")
@@ -1046,33 +1320,78 @@ class UnknownFormatDialog(QDialog):
         br = QPushButton("Применить длину"); br.setFixedWidth(160); br.clicked.connect(self._apply_roll)
         rr.addWidget(br)
         rl.addLayout(rr)
-        ba = QPushButton(f"По бо́льшей стороне  ({max(self.w,self.h):.0f} мм × {len(self.pages)} стр.)")
-        ba.setFont(QFont("Arial",10)); ba.clicked.connect(self._apply_auto)
-        rl.addWidget(ba)
+        roll_row = QHBoxLayout()
+        ba = QPushButton(
+            f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × {len(self.pages)} стр.)"
+        )
+        ba.setFont(QFont("Arial", 10))
+        ba.clicked.connect(self._apply_auto)
+        roll_row.addWidget(ba)
+        self.chk_cutting = QCheckBox("Резка")
+        self.chk_cutting.setChecked(False)
+        self.chk_cutting.setStyleSheet("color:#333;background:transparent;")
+        roll_row.addWidget(self.chk_cutting)
+        roll_row.addStretch()
+        rl.addLayout(roll_row)
         root.addWidget(rb)
         bs = QPushButton("Пропустить (не учитывать эти страницы)")
         bs.setStyleSheet("QPushButton{background-color:#888;color:white;}QPushButton:hover{background-color:#666;}")
         bs.clicked.connect(self._skip)
         root.addWidget(bs)
         outer.addWidget(mw, stretch=1)
-        self.hint_panel = FormatHintPanel(self)
+        self.hint_panel = FormatHintPanel(self, on_format_click=self._apply_format_by_name)
         outer.addWidget(self.hint_panel, stretch=0)
 
-    def _reposition_hint(self):
-        self.adjustSize()
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parent()
+        if parent:
+            pg = parent.frameGeometry()
+            self.adjustSize()
+            x = pg.x() + max(0, (pg.width() - self.width()) // 2)
+            y = pg.y() + max(0, (pg.height() - self.height()) // 2)
+            self.move(x, y)
 
     def closeEvent(self, event):
         if self.result_action is None:
-            self.result_action = "skip"; self.result_value = None
+            self.result_action = "skip"
+            self.result_value = None
+        self._destroy_overlay()
         super().closeEvent(event)
+
+    def done(self, result):
+        # Срабатывает при accept() / reject() — убираем overlay и останавливаем мигание
+        self._destroy_overlay()
+        if self._parent_window is not None:
+            stop_flash_taskbar(self._parent_window)
+        super().done(result)
+
+    def focusInEvent(self, event):
+        # Когда пользователь переключился на диалог — останавливаем мигание
+        if self._parent_window is not None:
+            stop_flash_taskbar(self._parent_window)
+        super().focusInEvent(event)
+
+    def _destroy_overlay(self):
+        if self._overlay is not None:
+            try:
+                parent = self._overlay.parent()
+                if parent is not None:
+                    parent.removeEventFilter(self._overlay)
+                self._overlay.hide()
+                self._overlay.deleteLater()
+            except Exception:
+                pass
+            self._overlay = None
 
     def _open_pages(self):
         try:
-            src = fitz.open(self.pdf_path); dst = fitz.open()
-            for pn in self.pages:
-                sp = src[pn-1]
-                np_ = dst.new_page(-1, width=sp.rect.width, height=sp.rect.height)
-                np_.show_pdf_page(np_.rect, src, pn-1)
+            src = fitz.open(self.pdf_path)
+            dst = fitz.open()
+            # insert_pdf сохраняет поворот (/Rotate) и границы листа как в оригинале;
+            # show_pdf_page часто «обрезает» чертежи из AutoCAD.
+            for pn in sorted(self.pages):
+                dst.insert_pdf(src, from_page=pn - 1, to_page=pn - 1)
             base = os.path.splitext(os.path.basename(self.pdf_path))[0]
             rng = compact_page_list(self.pages).replace(", ","_")
             tmp_dir = tempfile.gettempdir()
@@ -1089,33 +1408,82 @@ class UnknownFormatDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть:\n{e}")
 
-    def _apply_format(self):
-        raw = self.edit_format.text().strip()
+    def _apply_format_by_name(self, name):
+        self.edit_format.setText(name)
+        self._apply_format(preset=name)
+
+    def _apply_format(self, preset=None):
+        raw = (preset or self.edit_format.text()).strip()
         if not raw:
-            QMessageBox.warning(self,"Ошибка","Введите название формата."); return
-        def norm(s): return s.upper().replace("А","A").replace("Х","X").replace(" ","")
-        un = norm(raw); matched = None
-        for k in list(ISO_A)+list(ISO_A_NONSTANDARD):
-            if norm(k)==un: matched=k; break
-        if matched is None:
-            if QMessageBox.question(self,"Неизвестный формат",f'Формат "{raw}" не найден.\nВсё равно использовать?',
-                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)==QMessageBox.StandardButton.No: return
-            matched = un
-        self.result_action="format"; self.result_value=matched; self.accept()
+            QMessageBox.warning(self, "Ошибка", "Введите название формата.")
+            return
+        matched = resolve_format_name(raw)
+        if matched in UNPRINTABLE_FORMATS:
+            QMessageBox.warning(
+                self, "Нельзя печатать",
+                f"Формат «{matched}» нельзя распечатать — выберите другой.",
+            )
+            return
+        in_catalog = (
+            matched in ISO_A
+            or matched in ISO_A_NONSTANDARD
+            or matched in PRINTABLE_A0_SIZE_NAMES.values()
+        )
+        if not in_catalog:
+            if QMessageBox.question(
+                self, "Неизвестный формат",
+                f'Формат «{raw}» не найден в справочнике.\nВсё равно использовать?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            ) == QMessageBox.StandardButton.No:
+                return
+        self.result_action = "format"
+        self.result_value = matched
+        self.accept()
 
     def _apply_roll(self):
-        t = self.edit_roll.text().strip().replace(",",".")
-        try: v=float(t)
-        except ValueError: QMessageBox.warning(self,"Ошибка","Введите числовое значение."); return
-        if v<=0: QMessageBox.warning(self,"Ошибка","Значение должно быть > 0."); return
-        if v<100: v*=1000
-        self.result_action="roll_mm"; self.result_value=v; self.accept()
+        t = self.edit_roll.text().strip().replace(",", ".")
+        try:
+            v = float(t)
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Введите числовое значение.")
+            return
+        if v <= 0:
+            QMessageBox.warning(self, "Ошибка", "Значение должно быть > 0.")
+            return
+        if v < 100:
+            v *= 1000
+        self.result_action = "roll_mm"
+        self.result_value = (v, self.chk_cutting.isChecked())
+        self.accept()
 
     def _apply_auto(self):
-        self.result_action="roll_auto"; self.result_value=max(self.w,self.h); self.accept()
+        self.result_action = "roll_auto"
+        self.result_value = (max(self.w, self.h), self.chk_cutting.isChecked())
+        self.accept()
 
     def _skip(self):
         self.result_action="skip"; self.result_value=None; self.accept()
+
+
+class ModalOverlay(QWidget):
+    """Полупрозрачный затемняющий слой поверх главного окна."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 120);")
+        self.setGeometry(parent.rect())
+        parent.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        # Подстраиваем overlay под размер родителя при ресайзе
+        if event.type() == QEvent.Type.Resize and obj is self.parent():
+            self.setGeometry(self.parent().rect())
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event):
+        # Поглощаем клики, чтобы они не попадали на главное окно
+        event.accept()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1130,9 +1498,9 @@ class AnalysisThread(QThread):
     error           = pyqtSignal(str)
     stopped         = pyqtSignal()
 
-    def __init__(self, pdfs, force_bw=False):
+    def __init__(self, pdfs, force_bw=False, count_fill=False):
         super().__init__()
-        self.pdfs = pdfs; self.force_bw = force_bw
+        self.pdfs = pdfs; self.force_bw = force_bw; self.count_fill = count_fill
         self._user_action = self._user_value = None
         self._stop_requested = False
         import threading; self._wait_event = threading.Event()
@@ -1180,6 +1548,32 @@ class AnalysisThread(QThread):
             return False
         except Exception: return False
 
+    def detect_page_fill(self, page, min_fill_ratio=0.50, tol=12):
+        """Цветная заливка более 50% площади страницы."""
+        try:
+            scale = 200 / 72
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
+            )
+            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            a = np.asarray(img, dtype=np.uint8)
+            if a.ndim != 3:
+                return False
+            r = a[..., 0].astype(np.int16)
+            g = a[..., 1].astype(np.int16)
+            b = a[..., 2].astype(np.int16)
+            mx = np.maximum(np.maximum(r, g), b)
+            mn = np.minimum(np.minimum(r, g), b)
+            diff = mx - mn
+            not_white = mx < 252
+            colored = not_white & (diff >= tol)
+            total = a.shape[0] * a.shape[1]
+            if total <= 0:
+                return False
+            return (int(colored.sum()) / total) >= min_fill_ratio
+        except Exception:
+            return False
+
     def match_format_with_tolerance(self, w, h, table, tol=FORMAT_TOLERANCE_MM):
         for name,(fw,fh) in table.items():
             if ((abs(w-fw)<=tol and abs(h-fh)<=tol) or (abs(h-fw)<=tol and abs(w-fh)<=tol)):
@@ -1195,12 +1589,19 @@ class AnalysisThread(QThread):
                     with fitz.open(pdf_path) as doc:
                         total=len(doc); total_source+=total; file_page_counts.append(total)
                         name=os.path.basename(pdf_path); self.status.emit(f"Анализ: {name} ({total} стр.)")
-                        ff=defaultdict(int); fp=defaultdict(list); frb=frc=0.0; frb_p,frc_p=[],[]; cg=defaultdict(list); file_roll_groups=[]
+                        ff=defaultdict(int); fp=defaultdict(list); frb=frc=0.0; frb_p,frc_p=[],[]
+                        cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]
                         for i,p in enumerate(doc):
                             if self._stop_requested: break
-                            pn=i+1; r=p.mediabox
-                            w,h=sorted((round(r.width*25.4/72,1),round(r.height*25.4/72,1)))
+                            pn=i+1
+                            w, h = page_size_mm(p)
                             col = False if self.force_bw else self.detect_page_color(p)
+                            has_fill = (
+                                self.count_fill and not self.force_bw and col
+                                and self.detect_page_fill(p)
+                            )
+                            if has_fill:
+                                file_fill_pages.append(pn)
                             fA=self.match_format_with_tolerance(w,h,ISO_A)
                             fN=self.match_format_with_tolerance(w,h,ISO_A_NONSTANDARD)
                             if fA:
@@ -1210,7 +1611,7 @@ class AnalysisThread(QThread):
                             else: cg[(w,h,col)].append(pn)
                             prog=int(100*(file_idx+(i+1)/total)/total_files); self.progress.emit(prog); time.sleep(0.001)
                         if self._stop_requested:
-                            file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups}); break
+                            file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages)}); break
                         for (w,h,col),pages in cg.items():
                             if self._stop_requested: break
                             self.need_user_input.emit(w,h,col,pages,pdf_path); self._wait_for_user()
@@ -1219,13 +1620,25 @@ class AnalysisThread(QThread):
                             if action=="skip": pass
                             elif action=="format":
                                 key=f"{value} {kind}"; grand[key]+=len(pages); ff[key]+=len(pages); fp[key].extend(pages)
-                            elif action in ("roll_mm","roll_auto"):
-                                ppm=float(value); mm=ppm*len(pages)
-                                if col: grand["Рулон цвет мм"]+=mm; frc+=mm; frc_p.extend(pages)
-                                else: grand["Рулон ч/б мм"]+=mm; frb+=mm; frb_p.extend(pages)
-                                file_roll_groups.append({"w":w,"h":h,"color":col,"count":len(pages),"per_page_mm":ppm,"total_mm":mm,"pages":sorted(pages)})
-                                sk=f"{w:.0f}×{h:.0f}"; rfk=f"_roll_fold_{sk}_{kind}"; grand[rfk]=grand.get(rfk,0)+len(pages)
-                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups})
+                            elif action in ("roll_mm", "roll_auto"):
+                                if isinstance(value, tuple):
+                                    ppm, need_cut = float(value[0]), bool(value[1])
+                                else:
+                                    ppm, need_cut = float(value), False
+                                mm = ppm * len(pages)
+                                if col:
+                                    grand["Рулон цвет мм"] += mm; frc += mm; frc_p.extend(pages)
+                                else:
+                                    grand["Рулон ч/б мм"] += mm; frb += mm; frb_p.extend(pages)
+                                file_roll_groups.append({
+                                    "w": w, "h": h, "color": col, "count": len(pages),
+                                    "per_page_mm": ppm, "total_mm": mm, "pages": sorted(pages),
+                                    "cutting": need_cut,
+                                })
+                                sk = f"{w:.0f}×{h:.0f}"
+                                rfk = f"_roll_fold_{sk}_{kind}"
+                                grand[rfk] = grand.get(rfk, 0) + len(pages)
+                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages)})
                 except Exception as e: self.error.emit(f"Ошибка при обработке {pdf_path}: {e}"); continue
             if self._stop_requested:
                 self.finished.emit(dict(grand),total_source,file_page_counts,file_details); self.stopped.emit()
@@ -1249,7 +1662,7 @@ class PrintingCalculator(QMainWindow):
         self.card_color="#ffffff"; self.text_color="#333333"
         self.apply_style()
         self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
-        self.selected_path=""; self.copies=1; self.force_bw=False
+        self.selected_path=""; self.copies=1; self.force_bw=False; self.count_fill=True
         self.need_folding_a4=self.need_folding_a3=False
         self.need_binding_a4=self.need_binding_a3=False
         self.thread=self.current_dialog=None; self._history_items=[]
@@ -1284,9 +1697,25 @@ class PrintingCalculator(QMainWindow):
             QLabel{{color:{self.text_color};background:transparent;}}
             QLineEdit{{background-color:white;border:1px solid #ccc;border-radius:4px;padding:4px 6px;color:{self.text_color};}}
             QTextEdit{{background-color:{self.card_color};border:1px solid #e0e0e0;border-radius:4px;color:{self.text_color};selection-background-color:#cce4ff;selection-color:#000;}}
-            QSpinBox{{background-color:{self.card_color};color:{self.text_color};border:1px solid #ccc;border-radius:4px;padding:2px 4px;}}
-            QCheckBox{{color:{self.text_color};background:transparent;}}
-            QRadioButton{{background-color:{self.card_color};color:{self.text_color};padding:4px 12px;font-weight:normal;}}
+            QSpinBox{{
+                background-color:white;color:{self.text_color};
+                border:1px solid #888;border-radius:4px;padding:2px 24px 2px 6px;min-height:28px;
+            }}
+            QSpinBox::up-button{{
+                subcontrol-origin:border;subcontrol-position:top right;
+                width:22px;border-left:1px solid #888;background-color:#e0e0e0;
+            }}
+            QSpinBox::down-button{{
+                subcontrol-origin:border;subcontrol-position:bottom right;
+                width:22px;border-left:1px solid #888;background-color:#e0e0e0;
+            }}
+            QSpinBox::up-button:hover,QSpinBox::down-button:hover{{background-color:#c8c8c8;}}
+            QCheckBox{{color:{self.text_color};background:transparent;spacing:8px;font-size:11px;}}
+            QCheckBox::indicator{{width:18px;height:18px;border:2px solid #666;border-radius:3px;background:white;}}
+            QCheckBox::indicator:hover{{border-color:{self.primary_color};}}
+            QCheckBox::indicator:checked{{background-color:{self.primary_color};border-color:{self.primary_color};}}
+            QCheckBox::indicator:disabled{{background-color:#eee;border-color:#ccc;}}
+            QRadioButton{{background-color:transparent;color:{self.text_color};padding:4px 8px;font-weight:normal;spacing:8px;}}
             QRadioButton::indicator{{width:16px;height:16px;}}
             QRadioButton::indicator:unchecked{{background-color:white;border:2px solid #ccc;border-radius:9px;}}
             QRadioButton::indicator:checked{{background-color:{self.primary_color};border:2px solid {self.primary_color};border-radius:9px;}}
@@ -1319,18 +1748,32 @@ class PrintingCalculator(QMainWindow):
 
     def create_input_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(15); lay.setContentsMargins(20,20,20,20)
-        ff=QFrame(); fl=QVBoxLayout(ff); fl.addWidget(self._bold_label("📁 Выберите папку:"))
+        ff=QFrame(); fl=QVBoxLayout(ff); fl.addWidget(self._bold_label("📁 Папка или файл PDF:"))
         row=QHBoxLayout(); self.label_path=QLabel("Путь не выбран"); self.label_path.setStyleSheet("color:#666;padding:5px;background:transparent;"); row.addWidget(self.label_path)
-        bb=QPushButton("📂 Обзор..."); bb.clicked.connect(self.browse_path); row.addWidget(bb); fl.addLayout(row); lay.addWidget(ff)
+        bb=QPushButton("📂 Выбрать папку..."); bb.clicked.connect(self.browse_path); row.addWidget(bb)
+        bb_file=QPushButton("📄 Выбрать файл..."); bb_file.clicked.connect(self.browse_file); row.addWidget(bb_file)
+        fl.addLayout(row); lay.addWidget(ff)
         cf=QFrame(); cl=QVBoxLayout(cf); cl.addWidget(self._bold_label("🎨 Цветность:"))
         cr=QHBoxLayout(); self.rb_color_auto=QRadioButton("По файлу"); self.rb_color_bw=QRadioButton("Ч/б"); self.rb_color_auto.setChecked(True)
         self.color_mode_group=QButtonGroup(self); self.color_mode_group.addButton(self.rb_color_auto); self.color_mode_group.addButton(self.rb_color_bw)
         cr.addWidget(self.rb_color_auto); cr.addWidget(self.rb_color_bw); cr.addStretch(); cl.addLayout(cr)
-        h=QLabel("«По файлу» — анализ цвета каждой страницы.  «Ч/б» — всё считается чёрно-белым.")
-        h.setStyleSheet("color:#666;font-size:10px;background:transparent;"); h.setWordWrap(True); cl.addWidget(h); lay.addWidget(cf)
+        self.cb_count_fill = QCheckBox("Учитывать заливку цветом")
+        self.cb_count_fill.setChecked(False)
+        self.cb_count_fill.setStyleSheet("color:#333;background:transparent;")
+        cl.addWidget(self.cb_count_fill)
+        h=QLabel(
+            "«По файлу» — анализ цвета каждой страницы.  «Ч/б» — всё считается чёрно-белым.  "
+            "Заливка — если цвет занимает более 50% площади листа."
+        )
+        h.setStyleSheet("color:#666;font-size:10px;background:transparent;"); h.setWordWrap(True); cl.addWidget(h)
+        self.rb_color_auto.toggled.connect(self._update_fill_checkbox)
+        self.rb_color_bw.toggled.connect(self._update_fill_checkbox)
+        self._update_fill_checkbox()
+        lay.addWidget(cf)
         pf=QFrame(); pl=QVBoxLayout(pf); pl.addWidget(self._bold_label("⚙️ Параметры:"))
         r2=QHBoxLayout(); lbl_copies=QLabel("Количество экземпляров:"); lbl_copies.setStyleSheet(f"color:{self.text_color};background:transparent;"); r2.addWidget(lbl_copies)
-        self.spinbox_copies=NoScrollSpinBox(); self.spinbox_copies.setMinimum(1); self.spinbox_copies.setMaximum(100); self.spinbox_copies.setValue(1); self.spinbox_copies.setFixedWidth(80)
+        self.spinbox_copies=NoScrollSpinBox(); self.spinbox_copies.setMinimum(1); self.spinbox_copies.setMaximum(100); self.spinbox_copies.setValue(1); self.spinbox_copies.setFixedWidth(90)
+        self.spinbox_copies.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
         self.spinbox_copies.valueChanged.connect(self.on_params_changed); r2.addWidget(self.spinbox_copies); r2.addStretch(); pl.addLayout(r2)
         pl.addWidget(self._bold_label("📌 Брошюровка на пластиковую пружину:",10))
         br=QHBoxLayout(); self.rb_binding_none=QRadioButton("Не нужна"); self.rb_binding_a4=QRadioButton("A4"); self.rb_binding_a3=QRadioButton("A3"); self.rb_binding_none.setChecked(True)
@@ -1402,7 +1845,16 @@ class PrintingCalculator(QMainWindow):
         lay.addWidget(self._bold_label("📄 Полный отчет:"))
         self.text_report=QTextEdit(); self.text_report.setReadOnly(True); self.text_report.setFont(QFont("Courier",9))
         self.text_report.setStyleSheet(f"QTextEdit{{background-color:white;color:{self.text_color};border:1px solid #e0e0e0;border-radius:4px;}}"); lay.addWidget(self.text_report)
-        bc=QPushButton("📋 Копировать в буфер обмена"); bc.setMinimumHeight(40); bc.clicked.connect(self.copy_report); lay.addWidget(bc); return w
+        self.btn_copy_report=QPushButton("📋 Копировать в буфер обмена")
+        self.btn_copy_report.setMinimumHeight(40)
+        self.btn_copy_report.clicked.connect(self.copy_report)
+        self._copy_btn_style=(
+            "QPushButton{background-color:#0066cc;color:white;border:none;"
+            "padding:8px 16px;border-radius:4px;font-weight:bold;}"
+            "QPushButton:hover{background-color:#0052a3;}"
+        )
+        self.btn_copy_report.setStyleSheet(self._copy_btn_style)
+        lay.addWidget(self.btn_copy_report); return w
 
     def create_history_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
@@ -1428,6 +1880,21 @@ class PrintingCalculator(QMainWindow):
         p=QFileDialog.getExistingDirectory(self,"Выберите папку с PDF файлами")
         if p: self.selected_path=p; self.label_path.setText(f"✓ {p}")
 
+    def browse_file(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "Выберите PDF файл", "",
+            "PDF (*.pdf);;Все файлы (*.*)",
+        )
+        if p:
+            self.selected_path = p
+            self.label_path.setText(f"✓ {p}")
+
+    def _update_fill_checkbox(self):
+        auto = self.rb_color_auto.isChecked()
+        self.cb_count_fill.setEnabled(auto)
+        if not auto:
+            self.cb_count_fill.setChecked(False)
+
     def on_params_changed(self):
         self.copies=self.spinbox_copies.value(); self.need_folding_a4=self.rb_folding_a4.isChecked(); self.need_folding_a3=self.rb_folding_a3.isChecked()
         self.need_binding_a4=self.rb_binding_a4.isChecked(); self.need_binding_a3=self.rb_binding_a3.isChecked(); self.calculate_and_display()
@@ -1438,9 +1905,11 @@ class PrintingCalculator(QMainWindow):
         if self.selected_path.lower().endswith(".pdf"): pdfs=[self.selected_path]
         else: pdfs=[os.path.join(r,f) for r,_,fs in os.walk(self.selected_path) for f in fs if f.lower().endswith(".pdf")]
         if not pdfs: self.label_status.setText("❌ PDF файлы не найдены"); return
-        self.force_bw=self.rb_color_bw.isChecked(); self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
+        self.force_bw=self.rb_color_bw.isChecked()
+        count_fill = self.cb_count_fill.isChecked() and not self.force_bw
+        self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
         self.label_status.setText("⏳ Идет анализ..."); self.progress_bar.setValue(0); self.btn_analyze.setEnabled(False); self.btn_stop.setEnabled(True)
-        self.thread=AnalysisThread(pdfs,force_bw=self.force_bw)
+        self.thread=AnalysisThread(pdfs, force_bw=self.force_bw, count_fill=count_fill)
         self.thread.progress.connect(self.update_progress); self.thread.status.connect(self.update_status)
         self.thread.need_user_input.connect(self.show_unknown_format_dialog); self.thread.finished.connect(self.analysis_finished)
         self.thread.error.connect(self.analysis_error); self.thread.stopped.connect(self.analysis_stopped); self.thread.start()
@@ -1478,7 +1947,7 @@ class PrintingCalculator(QMainWindow):
             else: name="Расчёт"
             calc_data={'version':1,'app_version':get_app_version(),'saved_at':datetime.now().isoformat(),'name':name,
                 'source':{'path':self.selected_path,'files_count':len(self.file_page_counts),'total_pages':self.total_source},
-                'params':{'copies':self.copies,'force_bw':self.force_bw,
+                'params':{'copies':self.copies,'force_bw':self.force_bw,'count_fill':self.cb_count_fill.isChecked(),
                     'folding':('A4' if self.need_folding_a4 else ('A3' if self.need_folding_a3 else None)),
                     'binding':('A4' if self.need_binding_a4 else ('A3' if self.need_binding_a3 else None))},
                 'grand':self.grand,'file_page_counts':self.file_page_counts,'file_details':self.file_details,'report_text':self.text_report.toPlainText()}
@@ -1527,6 +1996,8 @@ class PrintingCalculator(QMainWindow):
             else: self.rb_binding_none.setChecked(True); self.need_binding_a4=self.need_binding_a3=False
             if self.force_bw: self.rb_color_bw.setChecked(True)
             else: self.rb_color_auto.setChecked(True)
+            self.cb_count_fill.setChecked(params.get('count_fill', False))
+            self._update_fill_checkbox()
             self.display_details(); self.calculate_and_display(); self.tabs.setCurrentIndex(1)
             self.label_status.setText(f"📂 Загружен расчёт: {data.get('name','')}")
         except Exception as e: QMessageBox.critical(self,"Ошибка загрузки",f"Не удалось загрузить расчёт:\n{e}")
@@ -1574,31 +2045,74 @@ class PrintingCalculator(QMainWindow):
         if key.endswith(" цвет"): return key[:-5],"цвет"
         return None,None
 
-    def _gfs(self, fmt): return ISO_A.get(fmt) or ISO_A_NONSTANDARD.get(fmt)
+    def _gfs(self, fmt):
+        return format_dimensions_mm(fmt)
+
+    def _detail_format_lines(self, f, kn, ss, pages, fill_p):
+        """Строки детализации: с заливкой и без — отдельными позициями."""
+        if not pages:
+            return []
+        split = self.cb_count_fill.isChecked() and not self.force_bw and fill_p
+        if not split:
+            rng = compact_page_list(pages)
+            line = f"    {f} {kn}{ss} — {len(pages)} стр."
+            if rng:
+                line += f" ({rng})"
+            return [line]
+        with_fill = [p for p in pages if p in fill_p]
+        without = [p for p in pages if p not in fill_p]
+        out = []
+        if with_fill:
+            rng = compact_page_list(with_fill)
+            out.append(
+                f"    {f} {kn}{ss} — {len(with_fill)} стр. [заливка] ({rng})"
+            )
+        if without:
+            rng = compact_page_list(without)
+            out.append(f"    {f} {kn}{ss} — {len(without)} стр. ({rng})")
+        return out
 
     def _autosize(self, te, minh=80, maxh=2000):
         d=te.document(); d.setTextWidth(te.viewport().width()); te.setFixedHeight(max(minh,min(int(d.size().height()+10),maxh)))
 
     def _build_print_summary(self):
-        c=self.copies; st=defaultdict(int); di=defaultdict(list); erb=erc=0.0
+        c = self.copies
+        st = defaultdict(int)
+        di = defaultdict(list)
         for fmt in ISO_A:
             for kind in KIND_ORDER:
-                cnt=int(self.grand.get(f"{fmt} {kind}",0))
-                if cnt>0: st[(fmt,kind)]+=cnt*c
-        for src,(tgt,div) in CONVERSION_RULES.items():
+                cnt = int(self.grand.get(f"{fmt} {kind}", 0))
+                if cnt > 0:
+                    st[(fmt, kind)] += cnt * c
+        for src, (tgt, div) in CONVERSION_RULES.items():
             for kind in KIND_ORDER:
-                cnt=int(self.grand.get(f"{src} {kind}",0))
-                if cnt>0: sq=cnt*c; add=math.ceil(sq/div); st[(tgt,kind)]+=add; di[(tgt,kind)].append((src,sq,add))
-        ps=set(CONVERSION_RULES)
-        for fmt,(fw,fh) in ISO_A_NONSTANDARD.items():
-            if fmt in ps: continue
+                cnt = int(self.grand.get(f"{src} {kind}", 0))
+                if cnt > 0:
+                    sq = cnt * c
+                    add = math.ceil(sq / div)
+                    st[(tgt, kind)] += add
+                    di[(tgt, kind)].append((src, sq, add))
+        erb = erc = 0.0
+        ps = set(CONVERSION_RULES)
+        for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
+            if fmt in ps:
+                continue
             for kind in KIND_ORDER:
-                cnt=int(self.grand.get(f"{fmt} {kind}",0))
-                if cnt>0:
-                    mm=max(fw,fh)*cnt*c
-                    if kind=="цвет": erc+=mm
-                    else: erb+=mm
-        return st,di,erb,erc
+                cnt = int(self.grand.get(f"{fmt} {kind}", 0))
+                if cnt > 0:
+                    mm = max(fw, fh) * cnt * c
+                    if kind == "цвет":
+                        erc += mm
+                    else:
+                        erb += mm
+        return st, di, erb, erc
+
+    def _roll_totals_mm(self):
+        """Рулон: ручной ввод + длина листов A4x3, A2x3 и др. (пог. м по длинной стороне)."""
+        _, _, erb, erc = self._build_print_summary()
+        rbt = self.grand.get("Рулон ч/б мм", 0) * self.copies + erb
+        rct = self.grand.get("Рулон цвет мм", 0) * self.copies + erc
+        return rbt, rct
 
     def _collect_roll_fold_groups(self):
         groups=[]
@@ -1635,12 +2149,35 @@ class PrintingCalculator(QMainWindow):
         return sl,nl,tf
 
     def _calc_cutting(self):
-        lines,total=[],0
+        lines, total = [], 0
         for fmt in ISO_A_NONSTANDARD:
-            if fmt not in CUTTING_FORMATS: continue
-            qty=(int(self.grand.get(f"{fmt} цвет",0))+int(self.grand.get(f"{fmt} ч/б",0)))*self.copies
-            if qty>0: fw,fh=ISO_A_NONSTANDARD[fmt]; lines.append(f"{fmt} ({fw}×{fh} мм) — {qty} шт."); total+=qty
-        return lines,total
+            if fmt not in CUTTING_FORMATS:
+                continue
+            qty = (
+                int(self.grand.get(f"{fmt} цвет", 0))
+                + int(self.grand.get(f"{fmt} ч/б", 0))
+            ) * self.copies
+            if qty > 0:
+                fw, fh = ISO_A_NONSTANDARD[fmt]
+                lines.append(f"{fmt} ({fw}×{fh} мм) — {qty} шт.")
+                total += qty
+        roll_cut = defaultdict(int)
+        for fd in self.file_details:
+            for rg in fd.get("roll_groups", []):
+                if not rg.get("cutting"):
+                    continue
+                kind = "цвет" if rg.get("color") else "ч/б"
+                key = f"{rg['w']:.0f}×{rg['h']:.0f} мм {kind}"
+                roll_cut[key] += int(rg.get("count", 0))
+        for key in sorted(roll_cut):
+            qty = roll_cut[key] * self.copies
+            if qty > 0:
+                lines.append(f"{key} — {qty} шт.")
+                total += qty
+        return lines, total
+
+    def _count_fill_pages(self):
+        return sum(len(fd.get("fill_pages", [])) for fd in self.file_details)
 
     def _calc_binding(self):
         bl,tb=[],0
@@ -1676,21 +2213,28 @@ class PrintingCalculator(QMainWindow):
         for fd in self.file_details:
             lines.append(f"📄 {fd['name']}  ({fd['total']} стр.)")
             fmts=fd.get("formats",{}); pm=fd.get("pages",{})
+            fill_p = set(fd.get("fill_pages", []))
             def sk(item):
                 f,k=self._pfk(item[0])
                 if f in FMT_ORDER: return (0,FMT_ORDER.index(f),k or "")
                 if f in ISO_A_NONSTANDARD: return (1,list(ISO_A_NONSTANDARD).index(f),k or "")
                 return (2,f or "",k or "")
-            for k,cnt in sorted(fmts.items(),key=sk):
-                f,kn=self._pfk(k)
-                if not f: continue
-                rng=compact_page_list(pm.get(k,[])); sz=self._gfs(f); ss=f" ({sz[0]}×{sz[1]} мм)" if sz else ""
-                if rng: lines.append(f"    {f} {kn}{ss} — {cnt} стр. ({rng})")
-                else: lines.append(f"    {f} {kn}{ss} — {cnt} стр.")
-            for rg in fd.get("roll_groups",[]):
-                kind_str="цвет" if rg["color"] else "ч/б"; rng=compact_page_list(rg["pages"])
-                line=f"    Рулон {kind_str} ({rg['w']:.0f}×{rg['h']:.0f} мм) — {rg['count']} стр."
-                if rng: line+=f" ({rng})"
+            for k, _cnt in sorted(fmts.items(), key=sk):
+                f, kn = self._pfk(k)
+                if not f:
+                    continue
+                pages = pm.get(k, [])
+                sz = self._gfs(f)
+                ss = f" ({sz[0]}×{sz[1]} мм)" if sz else ""
+                lines.extend(self._detail_format_lines(f, kn, ss, pages, fill_p))
+            for rg in fd.get("roll_groups", []):
+                kind_str = "цвет" if rg["color"] else "ч/б"
+                rng = compact_page_list(rg["pages"])
+                line = f"    Рулон {kind_str} ({rg['w']:.0f}×{rg['h']:.0f} мм) — {rg['count']} стр."
+                if rg.get("cutting"):
+                    line += " [резка]"
+                if rng:
+                    line += f" ({rng})"
                 lines.append(line)
             if not fd.get("roll_groups"):
                 for label,pk,mk in [("Рулон ч/б","roll_bw_pages","roll_bw"),("Рулон цвет","roll_color_pages","roll_color")]:
@@ -1704,8 +2248,15 @@ class PrintingCalculator(QMainWindow):
 
     def calculate_and_display(self):
         if not self.grand: return
-        self.display_details(); st,di,erb,erc=self._build_print_summary()
-        pl,tpp=[],0
+        self.display_details(); st, di, erb, erc = self._build_print_summary()
+        pl, tpp = [], 0
+        fill_src = self._count_fill_pages()
+        if fill_src > 0 and self.cb_count_fill.isChecked() and not self.force_bw:
+            pl.append(
+                f"🎨 Страниц с заливкой: {fill_src} "
+                f"(×{self.copies} экз. = {fill_src * self.copies})"
+            )
+            pl.append("")
         for fmt in FMT_ORDER:
             fw,fh=ISO_A[fmt]
             for kind in KIND_ORDER:
@@ -1715,7 +2266,9 @@ class PrintingCalculator(QMainWindow):
                 if di.get((fmt,kind)): parts=[f"из {s}: {sq}→{a}" for s,sq,a in di[(fmt,kind)]]; line+="  ["+", ".join(parts)+"]"
                 pl.append(line); tpp+=t
         self.text_printing.setText("\n".join(pl) if pl else "Нет данных для печати")
-        rl=[]; rbt=self.grand.get("Рулон ч/б мм",0)*self.copies+erb; rct=self.grand.get("Рулон цвет мм",0)*self.copies+erc
+        rbt = self.grand.get("Рулон ч/б мм", 0) * self.copies + erb
+        rct = self.grand.get("Рулон цвет мм", 0) * self.copies + erc
+        rl = []
         if rbt>0: rl.append(f"Ч/б — {rbt:.0f} мм ({rbt/1000:.2f} м)")
         if rct>0: rl.append(f"Цвет — {rct:.0f} мм ({rct/1000:.2f} м)")
         self.text_roll.setText("\n".join(rl) if rl else "Рулонная печать не требуется")
@@ -1757,11 +2310,28 @@ class PrintingCalculator(QMainWindow):
             for kind in KIND_ORDER:
                 cnt=int(self.grand.get(f"{fmt} {kind}",0))
                 if cnt>0: q=cnt*c; sb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр."); tpr+=q
-        nb=[]
-        for fmt,(fw,fh) in ISO_A_NONSTANDARD.items():
+        nb = []
+        for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
             for kind in KIND_ORDER:
-                cnt=int(self.grand.get(f"{fmt} {kind}",0))
-                if cnt>0: q=cnt*c; nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр."); tpr+=q
+                cnt = int(self.grand.get(f"{fmt} {kind}", 0))
+                if cnt > 0:
+                    q = cnt * c
+                    tpr += q
+                    # Для форматов A0xN — не печатаем, указываем ближайший
+                    if fmt in UNPRINTABLE_FORMATS:
+                        if fmt in A0_PRINTABLE_MM:
+                            pw, ph = A0_PRINTABLE_MM[fmt]
+                            nb.append(
+                                f"{fmt} {kind} ({fw}×{fh} мм) "
+                                f"→ печатаем {pw}×{ph} мм — {q} стр."
+                            )
+                        else:
+                            nb.append(
+                                f"{fmt} {kind} ({fw}×{fh} мм) "
+                                f"[не печатаем] — {q} стр."
+                            )
+                    else:
+                        nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
         cb=[]
         for k in self.grand:
             if k.startswith("Рулон") or k.startswith("_roll_fold_"): continue
@@ -1781,7 +2351,6 @@ class PrintingCalculator(QMainWindow):
                 m=re.match(r'(.+?) — (\d+) шт\.$',line)
                 if m: agg[m.group(1)]+=int(m.group(2))
             rb_lines=[f"{k} — {v} шт." for k,v in agg.items()]
-        rbr=self.grand.get("Рулон ч/б мм",0)*c; rcr=self.grand.get("Рулон цвет мм",0)*c
         cms="Ч/б (принудительно)" if self.force_bw else "По файлу"
         lines=["="*60,"АНАЛИЗ ПРОЕКТНОЙ ДОКУМЕНТАЦИИ","="*60,f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
             f"Всего страниц в источнике: {self.total_source}",f"Количество экземпляров: {c}",f"Режим цветности: {cms}","",
@@ -1811,11 +2380,6 @@ class PrintingCalculator(QMainWindow):
             if bl: lines.append("• По количеству страниц:"); lines.extend(f"  {l}" for l in bl)
             else: lines.append("Не требуется")
             lines.append(f"Итого брошюр: {tb}"); lines.append("")
-        if rbr>0 or rcr>0:
-            lines.append("РУЛОННАЯ ПЕЧАТЬ:")
-            if rbr>0: lines.append(f"  Ч/б — {rbr:.0f} мм ({rbr/1000:.2f} м)")
-            if rcr>0: lines.append(f"  Цвет — {rcr:.0f} мм ({rcr/1000:.2f} м)")
-            lines.append("")
         lines.append("─"*60); lines.append(f"ВЕС: {self._fw(tw)}"); lines.append("="*60)
         self.text_report.setText("\n".join(lines))
 
@@ -1823,10 +2387,24 @@ class PrintingCalculator(QMainWindow):
         txt=self.text_report.toPlainText()
         try:
             import pyperclip; pyperclip.copy(txt)
-        except:
-            try: p=subprocess.Popen(['clip'],stdin=subprocess.PIPE,shell=True); p.communicate(txt.encode('utf-8'))
-            except: pass
-        self.label_status.setText("✅ Отчет скопирован в буфер обмена")
+        except Exception:
+            try:
+                p=subprocess.Popen(['clip'],stdin=subprocess.PIPE,shell=True)
+                p.communicate(txt.encode('utf-8'))
+            except Exception:
+                pass
+        self.btn_copy_report.setText("Скопировано")
+        self.btn_copy_report.setStyleSheet(
+            "QPushButton{background-color:#28a745;color:white;border:none;"
+            "padding:8px 16px;border-radius:4px;font-weight:bold;}"
+        )
+        QTimer.singleShot(
+            1500,
+            lambda: (
+                self.btn_copy_report.setText("📋 Копировать в буфер обмена"),
+                self.btn_copy_report.setStyleSheet(self._copy_btn_style),
+            ),
+        )
 
     def closeEvent(self, event):
         if self.thread and self.thread.isRunning(): self.thread.request_stop(); self.thread.wait(2000)
