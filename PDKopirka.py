@@ -114,7 +114,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -637,24 +637,126 @@ def _changelog_html(version):
 <h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🔄 Полностью переработанное обновление
+    📐 Определение формата страниц
 </h3>
 <ul>
-    <li>Папочная сборка — программа теперь устанавливается в папку</li>
-    <li>Обновление работает на 100% — заменяется только содержимое, EXE не блокируется</li>
-    <li>Мгновенный запуск — больше нет распаковки при старте</li>
-    <li>Меньше ложных срабатываний антивируса</li>
-    <li>Теперь распознаются страницы со светло-цветными фонами</li>
-    <li>Лучше определяются пастельные оттенки и градиенты</li>
-    <li>Принудительная светлая тема для Windows 11</li>
-    <li>Стиль Fusion для стабильного отображения</li>
-    <li>Кнопка «Сохранить в TXT» в детализации</li>
-    <li>Компактные номера страниц</li>
-    <li>История расчётов</li>
-    <li>Вкладка «История»</li>
-    <li>Справочник форматов</li>
-    <li>Блок «Резка»</li>
-    <li>Учёт рулонных страниц при фальцовке</li>
+    <li>Размер страницы определяется по видимой области листа, а не по техническому холсту</li>
+    <li>Чертежи из AutoCAD/CAD с холстом 2000×2000 мм корректно распознаются как реальные форматы</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    👁️ Просмотр страниц нестандартного формата
+</h3>
+<ul>
+    <li>Временный PDF сохраняет поворот страниц и реальные границы листа, как в оригинале</li>
+    <li>Устранена проблема с горизонтальным холстом и обрезанной полосой для повёрнутых чертежей</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    📂 Выбор источника файлов
+</h3>
+<ul>
+    <li>Добавлена кнопка «Выбрать файл…» — анализ одного PDF без выбора папки</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🌀 Расчёт рулонной печати
+</h3>
+<ul>
+    <li>Исправлена ошибка двойного учёта листов A4×3, A3×3 и т.п. как метров рулона</li>
+    <li>В рулонную печать идут только страницы, явно выбранные как рулон</li>
+    <li>Восстановлен корректный расчёт длины по длинной стороне для расширенных форматов</li>
+    <li>Значения в CRM и отчёте для клиента теперь совпадают</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🎨 Заливка цветом
+</h3>
+<ul>
+    <li>Добавлен чекбокс «Учитывать заливку цветом» в режиме «По файлу»</li>
+    <li>Порог определения заливки: более 50% площади страницы</li>
+    <li>В детализации форматы с заливкой и без отображаются раздельными строками</li>
+    <li>В CRM выводится количество страниц с заливкой и пересчёт по экземплярам</li>
+    <li>В отчёте для клиента заливка не показывается</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    ✂️ Резка
+</h3>
+<ul>
+    <li>Добавлен чекбокс «Резка» в блок рулонной печати</li>
+    <li>Страницы с резкой попадают в блок «Форматы, требующие резки» в CRM</li>
+    <li>В детализации у рулона с резкой добавлена метка [резка]</li>
+    <li>Для форматов из справочника резка определяется автоматически</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    📐 Справочник форматов
+</h3>
+<ul>
+    <li>Переработана структура: 5 колонок (A4 / A3 / A2 / A1 / A0), ячейки одного размера</li>
+    <li>Для A0×N — компактные ячейки с реальным размером и ближайшим печатаемым в скобках</li>
+    <li>Клик по ячейке сразу применяет формат к выбранным страницам</li>
+    <li>Справочник всегда открыт справа от диалога</li>
+    <li>Диалог центрируется относительно главного окна</li>
+    <li>Поддержка кириллических вариантов ввода (А3х8, A3 x8 и т.п.)</li>
+    <li>Удалён «Вариант 1» с полем ввода — формат выбирается только кликом по ячейке</li>
+    <li>В блоке «Рулонная печать» оставлен только ввод в мм</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🎨 Цветовая маркировка форматов
+</h3>
+<ul>
+    <li>Зелёный — «Без резки»</li>
+    <li>Синий — «С учётом резки»</li>
+    <li>Серый — «Не печатаем»</li>
+    <li>Зелёный — «Ближайший формат»</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🔔 Привлечение внимания пользователя
+</h3>
+<ul>
+    <li>Затемнение фона главного окна при появлении диалога нестандартного формата</li>
+    <li>Мигание иконки в панели задач Windows, если программа не в фокусе</li>
+    <li>Автоматическая остановка мигания при переключении на диалог</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🖥️ Интерфейс
+</h3>
+<ul>
+    <li>У чекбоксов добавлена видимая рамка и синяя заливка при включении</li>
+    <li>Уточнены стили радиокнопок</li>
+    <li>Спинбокс «Количество экземпляров»: ширина 90 px, стандартные кнопки Qt</li>
+    <li>Кнопка «Копировать в буфер обмена» подсвечивается зелёным на 1.5 секунды</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    📄 Отчёт для клиента
+</h3>
+<ul>
+    <li>Убран блок «Рулонная печать» в метрах — клиент видит только реальные форматы и количество листов</li>
+    <li>Для форматов A0×N указывается ближайший печатаемый размер</li>
+    <li>Вкладка «Для менеджера» сохраняет полный метраж рулона</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    📊 Детализация файлов
+</h3>
+<ul>
+    <li>Убрана дублирующая строка «Всего страниц с заливкой»</li>
+    <li>Информация о заливке отображается рядом с каждым форматом</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    ⚙️ Технические изменения
+</h3>
+<ul>
+    <li>Overlay автоматически подстраивается под ресайз главного окна</li>
+    <li>Overlay корректно удаляется при любом способе закрытия диалога</li>
+    <li>Адаптирован расчёт веса под новую структуру данных с учётом заливки</li>
 </ul>
 """
 
@@ -1055,14 +1157,14 @@ class FormatHintPanel(QFrame):
     """Справочник форматов (5 блоков); клик вызывает on_format_click(name)."""
 
     # Высота одной строки в колонке (одинаковая для всех типов ячеек)
-    _ROW_HEIGHT = 44
+    _ROW_HEIGHT = 38
     # Количество строк в колонке (1 базовый + 7 расширенных)
     _ROWS_COUNT = 8
 
     def __init__(self, parent=None, on_format_click=None):
         super().__init__(parent)
         self._on_format_click = on_format_click
-        self._panel_width = 580
+        self._panel_width = 540
         self.setStyleSheet(
             "FormatHintPanel { background-color: #f9f9f9; "
             "border: 2px solid #0066cc; border-radius: 8px; color: #333; }"
@@ -1072,7 +1174,7 @@ class FormatHintPanel(QFrame):
         cl.setContentsMargins(8, 8, 8, 8)
         cl.setSpacing(6)
 
-        title = QLabel("📐 Справочник форматов\n(нажмите на формат)")
+        title = QLabel("📐 Выберите ближайший формат")
         title.setFont(QFont("Arial", 10, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("color: #0066cc; background: transparent; border: none;")
@@ -1086,13 +1188,11 @@ class FormatHintPanel(QFrame):
         legend.setWordWrap(True)
         cl.addWidget(legend)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(
-            "QScrollArea { border: 1px solid #ddd; background: white; }"
+        inner = QFrame()
+        inner.setStyleSheet(
+            "QFrame { background: white; border: 1px solid #ddd; "
+            "border-radius: 4px; }"
         )
-        inner = QWidget()
-        inner.setStyleSheet("background: white;")
         root = QHBoxLayout(inner)
         root.setSpacing(4)
         root.setContentsMargins(4, 4, 4, 4)
@@ -1103,8 +1203,7 @@ class FormatHintPanel(QFrame):
         root.addWidget(self._make_column_block(_FORMAT_COL_A1), stretch=1)
         root.addWidget(self._make_a0_column(), stretch=1)
 
-        scroll.setWidget(inner)
-        cl.addWidget(scroll, stretch=1)
+        cl.addWidget(inner, stretch=1)
 
     def _btn_style(self, color, enabled=True):
         if not enabled:
@@ -1269,60 +1368,92 @@ class UnknownFormatDialog(QDialog):
         cs = "цвет" if self.color else "ч/б"
         rng = compact_page_list(self.pages)
         self.setWindowTitle("Нестандартный формат")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(540)
         self.setModal(True)
+
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(0,0,0,0)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
         mw = QWidget()
         root = QVBoxLayout(mw)
         root.setSpacing(12)
-        root.setContentsMargins(20,20,20,20)
+        root.setContentsMargins(20, 20, 20, 20)
+
+        # Информация о файле
         ib = QGroupBox("Обнаружен неизвестный формат")
-        ib.setFont(QFont("Arial",10,QFont.Weight.Bold))
-        ib.setStyleSheet("QGroupBox{color:#333;background-color:white;}QGroupBox::title{color:#333;}")
+        ib.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        ib.setStyleSheet(
+            "QGroupBox{color:#333;background-color:white;}"
+            "QGroupBox::title{color:#333;}"
+        )
         il = QVBoxLayout(ib)
-        for t in [f"Файл: <b>{os.path.basename(self.pdf_path)}</b>",
-                  f"Размер: <b>{self.w} × {self.h} мм</b>",
-                  f"Цветность: <b>{cs}</b>",
-                  f"Страниц: <b>{len(self.pages)}</b>  ({rng})"]:
-            lb = QLabel(t); lb.setFont(QFont("Arial",10)); lb.setStyleSheet("color:#333;background:transparent;")
+        for t in [
+            f"Файл: <b>{os.path.basename(self.pdf_path)}</b>",
+            f"Размер: <b>{self.w} × {self.h} мм</b>",
+            f"Цветность: <b>{cs}</b>",
+            f"Страниц: <b>{len(self.pages)}</b>  ({rng})",
+        ]:
+            lb = QLabel(t)
+            lb.setFont(QFont("Arial", 10))
+            lb.setStyleSheet("color:#333;background:transparent;")
             il.addWidget(lb)
         bo = QPushButton("👁️ Открыть эти страницы для просмотра")
-        bo.setFont(QFont("Arial",10))
-        bo.setStyleSheet("QPushButton{background-color:#e67e22;color:white;padding:10px;}QPushButton:hover{background-color:#d35400;}")
+        bo.setFont(QFont("Arial", 10))
+        bo.setStyleSheet(
+            "QPushButton{background-color:#e67e22;color:white;padding:10px;}"
+            "QPushButton:hover{background-color:#d35400;}"
+        )
         bo.clicked.connect(self._open_pages)
         il.addWidget(bo)
         root.addWidget(ib)
-        fb = QGroupBox("Вариант 1 — подогнать к формату")
-        fb.setStyleSheet("QGroupBox{color:#333;background-color:white;}QGroupBox::title{color:#333;}")
-        fl = QHBoxLayout(fb)
-        self.edit_format = QLineEdit()
-        self.edit_format.setPlaceholderText("Например: A4, A3, A3x3, A2x4 …")
-        self.edit_format.setFont(QFont("Arial",10))
-        self.edit_format.setStyleSheet("QLineEdit{color:#333;background:white;border:1px solid #ccc;}")
-        fl.addWidget(self.edit_format)
-        bf = QPushButton("Применить формат"); bf.setFixedWidth(160)
-        bf.clicked.connect(lambda: self._apply_format())
-        fl.addWidget(bf)
-        root.addWidget(fb)
-        rb = QGroupBox("Вариант 2 — рулонная печать")
-        rb.setStyleSheet("QGroupBox{color:#333;background-color:white;}QGroupBox::title{color:#333;}")
+
+        # Подсказка о выборе формата
+        hint = QLabel(
+            "💡 <b>Выберите формат справа</b> в справочнике "
+            "(нажмите на нужную ячейку)"
+        )
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        hint.setFont(QFont("Arial", 10))
+        hint.setStyleSheet(
+            "color:#0066cc;background:#eaf3ff;border:1px solid #b3d4f5;"
+            "border-radius:4px;padding:10px;"
+        )
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        # Вариант — рулонная печать
+        rb = QGroupBox("Рулонная печать")
+        rb.setStyleSheet(
+            "QGroupBox{color:#333;background-color:white;}"
+            "QGroupBox::title{color:#333;}"
+        )
         rl = QVBoxLayout(rb)
+        rl.setContentsMargins(10, 6, 10, 10)
+        rl.setSpacing(6)
+
         rr = QHBoxLayout()
-        lbl_len = QLabel("Длина на страницу (мм или м):"); lbl_len.setStyleSheet("color:#333;background:transparent;")
+        lbl_len = QLabel("Длина на страницу (мм):")
+        lbl_len.setStyleSheet("color:#333;background:transparent;")
         rr.addWidget(lbl_len)
         self.edit_roll = QLineEdit()
-        self.edit_roll.setPlaceholderText("Например: 594 или 0.594")
-        self.edit_roll.setFont(QFont("Arial",10))
-        self.edit_roll.setStyleSheet("QLineEdit{color:#333;background:white;border:1px solid #ccc;}")
+        self.edit_roll.setPlaceholderText("Например: 594")
+        self.edit_roll.setFont(QFont("Arial", 10))
+        self.edit_roll.setStyleSheet(
+            "QLineEdit{color:#333;background:white;border:1px solid #ccc;"
+            "padding:4px 6px;}"
+        )
         rr.addWidget(self.edit_roll)
-        br = QPushButton("Применить длину"); br.setFixedWidth(160); br.clicked.connect(self._apply_roll)
+        br = QPushButton("Применить длину")
+        br.setFixedWidth(160)
+        br.clicked.connect(self._apply_roll)
         rr.addWidget(br)
         rl.addLayout(rr)
+
         roll_row = QHBoxLayout()
         ba = QPushButton(
-            f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × {len(self.pages)} стр.)"
+            f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × "
+            f"{len(self.pages)} стр.)"
         )
         ba.setFont(QFont("Arial", 10))
         ba.clicked.connect(self._apply_auto)
@@ -1334,12 +1465,20 @@ class UnknownFormatDialog(QDialog):
         roll_row.addStretch()
         rl.addLayout(roll_row)
         root.addWidget(rb)
+
+        # Пропустить
         bs = QPushButton("Пропустить (не учитывать эти страницы)")
-        bs.setStyleSheet("QPushButton{background-color:#888;color:white;}QPushButton:hover{background-color:#666;}")
+        bs.setStyleSheet(
+            "QPushButton{background-color:#888;color:white;}"
+            "QPushButton:hover{background-color:#666;}"
+        )
         bs.clicked.connect(self._skip)
         root.addWidget(bs)
+
         outer.addWidget(mw, stretch=1)
-        self.hint_panel = FormatHintPanel(self, on_format_click=self._apply_format_by_name)
+        self.hint_panel = FormatHintPanel(
+            self, on_format_click=self._apply_format_by_name
+        )
         outer.addWidget(self.hint_panel, stretch=0)
 
     def showEvent(self, event):
@@ -1409,13 +1548,12 @@ class UnknownFormatDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть:\n{e}")
 
     def _apply_format_by_name(self, name):
-        self.edit_format.setText(name)
         self._apply_format(preset=name)
 
     def _apply_format(self, preset=None):
-        raw = (preset or self.edit_format.text()).strip()
+        raw = (preset or "").strip()
         if not raw:
-            QMessageBox.warning(self, "Ошибка", "Введите название формата.")
+            QMessageBox.warning(self, "Ошибка", "Выберите формат в справочнике.")
             return
         matched = resolve_format_name(raw)
         if matched in UNPRINTABLE_FORMATS:
@@ -1425,15 +1563,15 @@ class UnknownFormatDialog(QDialog):
             )
             return
         in_catalog = (
-            matched in ISO_A
-            or matched in ISO_A_NONSTANDARD
-            or matched in PRINTABLE_A0_SIZE_NAMES.values()
+                matched in ISO_A
+                or matched in ISO_A_NONSTANDARD
+                or matched in PRINTABLE_A0_SIZE_NAMES.values()
         )
         if not in_catalog:
             if QMessageBox.question(
-                self, "Неизвестный формат",
-                f'Формат «{raw}» не найден в справочнике.\nВсё равно использовать?',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    self, "Неизвестный формат",
+                    f'Формат «{raw}» не найден в справочнике.\nВсё равно использовать?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             ) == QMessageBox.StandardButton.No:
                 return
         self.result_action = "format"
@@ -1445,13 +1583,11 @@ class UnknownFormatDialog(QDialog):
         try:
             v = float(t)
         except ValueError:
-            QMessageBox.warning(self, "Ошибка", "Введите числовое значение.")
+            QMessageBox.warning(self, "Ошибка", "Введите числовое значение в мм.")
             return
         if v <= 0:
             QMessageBox.warning(self, "Ошибка", "Значение должно быть > 0.")
             return
-        if v < 100:
-            v *= 1000
         self.result_action = "roll_mm"
         self.result_value = (v, self.chk_cutting.isChecked())
         self.accept()
@@ -2076,22 +2212,69 @@ class PrintingCalculator(QMainWindow):
         d=te.document(); d.setTextWidth(te.viewport().width()); te.setFixedHeight(max(minh,min(int(d.size().height()+10),maxh)))
 
     def _build_print_summary(self):
+        """
+        Возвращает:
+          st  — {(fmt, kind, has_fill): count}  — для печати по экземплярам
+          di  — {(fmt, kind, has_fill): [(src_fmt, src_qty, added)]} — конвертации
+          erb — длина рулона ч/б (мм) из нестандартных форматов
+          erc — длина рулона цвет (мм) из нестандартных форматов
+        has_fill — True если страница с заливкой, False — без, None — не различаем
+        """
         c = self.copies
         st = defaultdict(int)
         di = defaultdict(list)
+        split_fill = self.cb_count_fill.isChecked() and not self.force_bw
+
+        # Считаем заливочные страницы по форматам из file_details
+        fill_counts = defaultdict(int)  # {(fmt, kind): count}
+        if split_fill:
+            for fd in self.file_details:
+                fill_pages = set(fd.get("fill_pages", []))
+                if not fill_pages:
+                    continue
+                pages_map = fd.get("pages", {})
+                for key, pages in pages_map.items():
+                    fmt, kind = self._pfk(key)
+                    if not fmt or kind != "цвет":
+                        continue
+                    cnt = sum(1 for p in pages if p in fill_pages)
+                    if cnt > 0:
+                        fill_counts[(fmt, kind)] += cnt
+
+        # Стандартные форматы
         for fmt in ISO_A:
             for kind in KIND_ORDER:
-                cnt = int(self.grand.get(f"{fmt} {kind}", 0))
-                if cnt > 0:
-                    st[(fmt, kind)] += cnt * c
+                total_cnt = int(self.grand.get(f"{fmt} {kind}", 0))
+                if total_cnt <= 0:
+                    continue
+                fill_cnt = fill_counts.get((fmt, kind), 0) if split_fill else 0
+                normal_cnt = total_cnt - fill_cnt
+                if split_fill and fill_cnt > 0:
+                    st[(fmt, kind, True)] += fill_cnt * c
+                if normal_cnt > 0:
+                    st[(fmt, kind, False)] += normal_cnt * c
+
+        # Конвертации (A4x3, A4x4 → A1; A3x3, A3x4 → A0)
         for src, (tgt, div) in CONVERSION_RULES.items():
             for kind in KIND_ORDER:
-                cnt = int(self.grand.get(f"{src} {kind}", 0))
-                if cnt > 0:
-                    sq = cnt * c
+                total_cnt = int(self.grand.get(f"{src} {kind}", 0))
+                if total_cnt <= 0:
+                    continue
+                fill_cnt = fill_counts.get((src, kind), 0) if split_fill else 0
+                normal_cnt = total_cnt - fill_cnt
+
+                if split_fill and fill_cnt > 0:
+                    sq = fill_cnt * c
                     add = math.ceil(sq / div)
-                    st[(tgt, kind)] += add
-                    di[(tgt, kind)].append((src, sq, add))
+                    st[(tgt, kind, True)] += add
+                    di[(tgt, kind, True)].append((src, sq, add))
+                if normal_cnt > 0:
+                    sq = normal_cnt * c
+                    add = math.ceil(sq / div)
+                    st[(tgt, kind, False)] += add
+                    di[(tgt, kind, False)].append((src, sq, add))
+
+        # Рулон из нестандартных
         erb = erc = 0.0
         ps = set(CONVERSION_RULES)
         for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
@@ -2194,17 +2377,26 @@ class PrintingCalculator(QMainWindow):
     def _fw(self, g): return f"{g/1000:.2f} кг"
 
     def _calc_weight(self, st, rbm, rcm, bt, tb):
-        total=0.0
+        total = 0.0
         for fmt in FMT_ORDER:
-            sz=ISO_A.get(fmt)
-            if not sz: continue
-            wps=sz[0]*sz[1]*PAPER_DENSITY_G_PER_MM2; qty=sum(st.get((fmt,k),0) for k in KIND_ORDER)
-            if qty>0: total+=wps*qty
-        rm=rbm+rcm
-        if rm>0: total+=rm*ROLL_WEIGHT_G_PER_MM
-        if bt and tb>0:
-            u=BINDING_WEIGHT_G.get(bt,0)
-            if u>0: total+=u*tb
+            sz = ISO_A.get(fmt)
+            if not sz:
+                continue
+            wps = sz[0] * sz[1] * PAPER_DENSITY_G_PER_MM2
+            qty = sum(
+                st.get((fmt, k, hf), 0)
+                for k in KIND_ORDER
+                for hf in (True, False)
+            )
+            if qty > 0:
+                total += wps * qty
+        rm = rbm + rcm
+        if rm > 0:
+            total += rm * ROLL_WEIGHT_G_PER_MM
+        if bt and tb > 0:
+            u = BINDING_WEIGHT_G.get(bt, 0)
+            if u > 0:
+                total += u * tb
         return total
 
     def display_details(self):
@@ -2247,24 +2439,27 @@ class PrintingCalculator(QMainWindow):
         self.text_details.setText("\n".join(lines).rstrip())
 
     def calculate_and_display(self):
-        if not self.grand: return
-        self.display_details(); st, di, erb, erc = self._build_print_summary()
+        if not self.grand:
+            return
+        self.display_details()
+        st, di, erb, erc = self._build_print_summary()
         pl, tpp = [], 0
-        fill_src = self._count_fill_pages()
-        if fill_src > 0 and self.cb_count_fill.isChecked() and not self.force_bw:
-            pl.append(
-                f"🎨 Страниц с заливкой: {fill_src} "
-                f"(×{self.copies} экз. = {fill_src * self.copies})"
-            )
-            pl.append("")
         for fmt in FMT_ORDER:
-            fw,fh=ISO_A[fmt]
+            fw, fh = ISO_A[fmt]
             for kind in KIND_ORDER:
-                t=st.get((fmt,kind),0)
-                if t<=0: continue
-                line=f"{fmt} {kind} ({fw}×{fh} мм) — {t} стр."
-                if di.get((fmt,kind)): parts=[f"из {s}: {sq}→{a}" for s,sq,a in di[(fmt,kind)]]; line+="  ["+", ".join(parts)+"]"
-                pl.append(line); tpp+=t
+                # Сначала позиция с заливкой (если есть)
+                for has_fill in (True, False):
+                    t = st.get((fmt, kind, has_fill), 0)
+                    if t <= 0:
+                        continue
+                    suffix = " [заливка]" if has_fill else ""
+                    line = f"{fmt} {kind} ({fw}×{fh} мм) — {t} стр.{suffix}"
+                    conv = di.get((fmt, kind, has_fill))
+                    if conv:
+                        parts = [f"из {s}: {sq}→{a}" for s, sq, a in conv]
+                        line += "  [" + ", ".join(parts) + "]"
+                    pl.append(line)
+                    tpp += t
         self.text_printing.setText("\n".join(pl) if pl else "Нет данных для печати")
         rbt = self.grand.get("Рулон ч/б мм", 0) * self.copies + erb
         rct = self.grand.get("Рулон цвет мм", 0) * self.copies + erc
