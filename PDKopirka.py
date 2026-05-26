@@ -114,7 +114,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "1.0.7"
+APP_VERSION = "2.0.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -219,11 +219,20 @@ def _read_registry_version():
 
 
 def get_app_version():
-    """Версия из version.txt / реестра (после установки), иначе константа в коде."""
-    for source in (_read_version_file, _read_registry_version):
-        ver = source()
-        if ver:
-            return ver
+    """
+    Версия для отображения и проверки обновлений:
+    1) version.txt рядом с exe (после установки Inno Setup)
+    2) APP_VERSION из собранного exe (при сборке PyInstaller)
+    3) реестр Windows — только запасной вариант
+    """
+    ver = _read_version_file()
+    if ver:
+        return ver
+    if getattr(sys, "frozen", False):
+        return APP_VERSION
+    reg = _read_registry_version()
+    if reg:
+        return reg
     return APP_VERSION
 
 
@@ -533,8 +542,9 @@ class UpdateDialog(QDialog):
 # Диалог «Что нового»
 # ─────────────────────────────────────────────────────────────────────────────
 
-CHANGELOG_HTML = """
-<h2 style="color:#0066cc; margin-bottom:10px;">Версия 1.0.0</h2>
+def _changelog_html(version):
+    return f"""
+<h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     🔄 Полностью переработанное обновление
@@ -543,17 +553,17 @@ CHANGELOG_HTML = """
     <li>Папочная сборка — программа теперь устанавливается в папку</li>
     <li>Обновление работает на 100% — заменяется только содержимое, EXE не блокируется</li>
     <li>Мгновенный запуск — больше нет распаковки при старте</li>
-    <li>Меньше ложных срабатываний антивируса</b></li>
-    <li>Теперь распознаются страницы со <b>светло-цветными фонами</b></li>
+    <li>Меньше ложных срабатываний антивируса</li>
+    <li>Теперь распознаются страницы со светло-цветными фонами</li>
     <li>Лучше определяются пастельные оттенки и градиенты</li>
-    <li> Принудительная светлая тема для Windows 11</li>
+    <li>Принудительная светлая тема для Windows 11</li>
     <li>Стиль Fusion для стабильного отображения</li>
     <li>Кнопка «Сохранить в TXT» в детализации</li>
-    <li> Компактные номера страниц</li>
-    <li><b>История расчётов</b></li>
+    <li>Компактные номера страниц</li>
+    <li>История расчётов</li>
     <li>Вкладка «История»</li>
     <li>Справочник форматов</li>
-    <li> Блок «Резка»</li>
+    <li>Блок «Резка»</li>
     <li>Учёт рулонных страниц при фальцовке</li>
 </ul>
 """
@@ -584,7 +594,7 @@ class WhatsNewDialog(QDialog):
             "QTextEdit { background: white; color: #333; border: 1px solid #ddd; "
             "border-radius: 6px; padding: 8px; }"
         )
-        self.te.setHtml(CHANGELOG_HTML)
+        self.te.setHtml(_changelog_html(self.current_version))
         lay.addWidget(self.te)
         btn = QPushButton("👍 Закрыть")
         btn.setFont(QFont("Arial", 11, QFont.Weight.Bold))
@@ -711,9 +721,10 @@ CUTTING_FORMATS = {
 # Лицензия
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Секретный Gist: https://gist.github.com/fabilya/6a921f617ea86c154dbad582a9c91dec
 LICENSE_CHECK_URL = (
     "https://gist.githubusercontent.com/fabilya/"
-    "d460ac938145cd8d99f261c250f90255/raw/gistfile1.txt"
+    "6a921f617ea86c154dbad582a9c91dec/raw/gistfile1.txt"
 )
 
 
@@ -743,6 +754,17 @@ def _verify_token(token):
         return False, "PARSE_ERROR"
 
 
+def _extract_token_from_gist(text):
+    """Берёт первую подходящую строку токена из содержимого Gist."""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.count("|") == 2:
+            return line
+    return text.strip()
+
+
 def check_remote_license():
     if not LICENSE_CHECK_URL:
         return True, ""
@@ -751,22 +773,35 @@ def check_remote_license():
         sep = "&" if "?" in LICENSE_CHECK_URL else "?"
         url = f"{LICENSE_CHECK_URL}{sep}_={cb}"
         req = urllib.request.Request(url, method="GET")
-        req.add_header("User-Agent", "PrintCalc/1.0")
+        req.add_header("User-Agent", "PDKopirka/1.0")
         req.add_header("Cache-Control", "no-cache, no-store, must-revalidate")
         req.add_header("Pragma", "no-cache")
         with _urlopen_safe(req, timeout=15) as resp:
-            token = resp.read().decode("utf-8").strip()
+            raw = resp.read().decode("utf-8-sig", errors="replace")
+        token = _extract_token_from_gist(raw)
+        if not token:
+            return False, (
+                "Ошибка проверки лицензии.\n\n"
+                "В Gist пустой файл или нет строки токена.\n\n"
+                "Обратитесь к администратору."
+            )
         valid, status = _verify_token(token)
         if not valid:
             return False, (
                 f"Ошибка проверки лицензии.\n\nКод: {status}\n\n"
-                "Обратитесь к администратору."
+                "Обновите токен в Gist (generate_token.py) "
+                "и проверьте подключение к интернету."
             )
         if status == "ACTIVE":
             return True, ""
+        if status == "BLOCKED":
+            return False, (
+                "Доступ к программе заблокирован администратором.\n\n"
+                "Обратитесь к администратору."
+            )
         return False, (
-            "Доступ к программе заблокирован администратором.\n\n"
-            "Обратитесь к администратору."
+            f"Неизвестный статус лицензии: {status}\n\n"
+            "В Gist должен быть токен ACTIVE или BLOCKED."
         )
     except urllib.error.URLError:
         return False, (
@@ -1809,6 +1844,12 @@ def main():
     icon_path = resource_path("logo.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
+
+    # Проверка лицензии через Gist (ACTIVE / BLOCKED)
+    ok, msg = check_remote_license()
+    if not ok:
+        QMessageBox.critical(None, "Доступ запрещён", msg)
+        sys.exit(1)
 
     _create_single_instance_mutex()
 
