@@ -634,8 +634,6 @@ class UpdateDialog(QDialog):
 
 def _changelog_html(version):
     return f"""
-<h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
-
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     📐 Определение формата страниц
 </h3>
