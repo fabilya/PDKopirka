@@ -2636,6 +2636,7 @@ class PrintingCalculator(QMainWindow):
                 if slr: ftp.append("")
                 ftp.append("Нестандартные/рулонные форматы:"); ftp.extend(nlr)
         self.text_folding.setText("\n".join(ftp) if ftp else "Фальцовка не требуется")
+
         blines,tb,bt=[],0,None
         if self.need_binding_a4: bt="A4"; blines,tb=self._calc_binding()
         elif self.need_binding_a3: bt="A3"; blines,tb=self._calc_binding()
