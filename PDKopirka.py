@@ -114,7 +114,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -634,127 +634,43 @@ class UpdateDialog(QDialog):
 
 def _changelog_html(version):
     return f"""
+<h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
+
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📐 Определение формата страниц
+    📂 Выбор файлов и папок
 </h3>
 <ul>
-    <li>Размер страницы определяется по видимой области листа, а не по техническому холсту</li>
-    <li>Чертежи из AutoCAD/CAD с холстом 2000×2000 мм корректно распознаются как реальные форматы</li>
+    <li>Добавлена зона перетаскивания (Drag & Drop) — можно перетащить папку или PDF файл прямо в окно программы</li>
+    <li>Кнопки «Папка» и «Файл» вынесены в отдельный блок справа от зоны DnD</li>
+    <li>Визуальная подсветка зоны при наведении файла (синяя пунктирная рамка)</li>
+    <li>После выбора зона становится зелёной и показывает путь</li>
+    <li>Путь отображается в одну строку, при необходимости можно выделить и скопировать мышкой</li>
 </ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    👁️ Просмотр страниц нестандартного формата
+    📐 Определение форматов
 </h3>
 <ul>
-    <li>Временный PDF сохраняет поворот страниц и реальные границы листа, как в оригинале</li>
-    <li>Устранена проблема с горизонтальным холстом и обрезанной полосой для повёрнутых чертежей</li>
+    <li>Погрешность определения формата увеличена с 5 до 10 мм — корректнее распознаются чертежи с нестандартными размерами</li>
 </ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📂 Выбор источника файлов
+    🎯 Обработка форматов A0×N
 </h3>
 <ul>
-    <li>Добавлена кнопка «Выбрать файл…» — анализ одного PDF без выбора папки</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🌀 Расчёт рулонной печати
-</h3>
-<ul>
-    <li>Исправлена ошибка двойного учёта листов A4×3, A3×3 и т.п. как метров рулона</li>
-    <li>В рулонную печать идут только страницы, явно выбранные как рулон</li>
-    <li>Восстановлен корректный расчёт длины по длинной стороне для расширенных форматов</li>
-    <li>Значения в CRM и отчёте для клиента теперь совпадают</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🎨 Заливка цветом
-</h3>
-<ul>
-    <li>Добавлен чекбокс «Учитывать заливку цветом» в режиме «По файлу»</li>
-    <li>Порог определения заливки: более 50% площади страницы</li>
-    <li>В детализации форматы с заливкой и без отображаются раздельными строками</li>
-    <li>В CRM выводится количество страниц с заливкой и пересчёт по экземплярам</li>
-    <li>В отчёте для клиента заливка не показывается</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    ✂️ Резка
-</h3>
-<ul>
-    <li>Добавлен чекбокс «Резка» в блок рулонной печати</li>
-    <li>Страницы с резкой попадают в блок «Форматы, требующие резки» в CRM</li>
-    <li>В детализации у рулона с резкой добавлена метка [резка]</li>
-    <li>Для форматов из справочника резка определяется автоматически</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📐 Справочник форматов
-</h3>
-<ul>
-    <li>Переработана структура: 5 колонок (A4 / A3 / A2 / A1 / A0), ячейки одного размера</li>
-    <li>Для A0×N — компактные ячейки с реальным размером и ближайшим печатаемым в скобках</li>
-    <li>Клик по ячейке сразу применяет формат к выбранным страницам</li>
-    <li>Справочник всегда открыт справа от диалога</li>
-    <li>Диалог центрируется относительно главного окна</li>
-    <li>Поддержка кириллических вариантов ввода (А3х8, A3 x8 и т.п.)</li>
-    <li>Удалён «Вариант 1» с полем ввода — формат выбирается только кликом по ячейке</li>
-    <li>В блоке «Рулонная печать» оставлен только ввод в мм</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🎨 Цветовая маркировка форматов
-</h3>
-<ul>
-    <li>Зелёный — «Без резки»</li>
-    <li>Синий — «С учётом резки»</li>
-    <li>Серый — «Не печатаем»</li>
-    <li>Зелёный — «Ближайший формат»</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🔔 Привлечение внимания пользователя
-</h3>
-<ul>
-    <li>Затемнение фона главного окна при появлении диалога нестандартного формата</li>
-    <li>Мигание иконки в панели задач Windows, если программа не в фокусе</li>
-    <li>Автоматическая остановка мигания при переключении на диалог</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🖥️ Интерфейс
-</h3>
-<ul>
-    <li>У чекбоксов добавлена видимая рамка и синяя заливка при включении</li>
-    <li>Уточнены стили радиокнопок</li>
-    <li>Спинбокс «Количество экземпляров»: ширина 90 px, стандартные кнопки Qt</li>
-    <li>Кнопка «Копировать в буфер обмена» подсвечивается зелёным на 1.5 секунды</li>
+    <li>Клик по ячейке A0×N в справочнике корректно обрабатывается как печать на рулоне 910 мм</li>
+    <li>В детализации: <code>A0x2 ч/б (1189×1682 мм) → 910×1287 — 2 стр. (1-2)</code></li>
+    <li>В блоке для менеджера (CRM): добавляется метраж в рулонную печать по большей стороне печатаемого формата</li>
+    <li>В отчёте для клиента: A0×N отображаются в общем списке расширенных форматов с указанием печатаемого размера и масштаба</li>
+    <li>Устранено дублирование A0×N в детализации (раньше выводились дважды — в общем блоке и в roll_groups)</li>
 </ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     📄 Отчёт для клиента
 </h3>
 <ul>
-    <li>Убран блок «Рулонная печать» в метрах — клиент видит только реальные форматы и количество листов</li>
-    <li>Для форматов A0×N указывается ближайший печатаемый размер</li>
-    <li>Вкладка «Для менеджера» сохраняет полный метраж рулона</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📊 Детализация файлов
-</h3>
-<ul>
-    <li>Убрана дублирующая строка «Всего страниц с заливкой»</li>
-    <li>Информация о заливке отображается рядом с каждым форматом</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    ⚙️ Технические изменения
-</h3>
-<ul>
-    <li>Overlay автоматически подстраивается под ресайз главного окна</li>
-    <li>Overlay корректно удаляется при любом способе закрытия диалога</li>
-    <li>Адаптирован расчёт веса под новую структуру данных с учётом заливки</li>
+    <li>Объединены блоки расширенных форматов и A0×N в одну группу</li>
+    <li>«Итого страниц» перенесено в конец отчёта</li>
 </ul>
 """
 
@@ -876,7 +792,7 @@ class HistoryManager:
 # ─────────────────────────────────────────────────────────────────────────────
 
 Image.MAX_IMAGE_PIXELS = None
-FORMAT_TOLERANCE_MM = 5
+FORMAT_TOLERANCE_MM = 10
 
 ISO_A = {
     "A4": (210, 297), "A3": (297, 420), "A2": (420, 594),
@@ -1124,7 +1040,6 @@ class A0NearestFormatRow(QFrame):
         self._on_format_click = on_format_click
         ow, oh = A0_OVERSIZE_MM[key]
         pw, ph = A0_PRINTABLE_MM[key]
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
             "A0NearestFormatRow { background: white; border: 1px solid #ccc; border-radius: 4px; }"
             "A0NearestFormatRow:hover { background: #e8f4ff; border-color: #2e7d32; }"
@@ -1144,11 +1059,6 @@ class A0NearestFormatRow(QFrame):
         line.setStyleSheet("background: transparent; border: none;")
         lay.addWidget(title)
         lay.addWidget(line)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._on_format_click:
-            self._on_format_click(self._fmt_name)
-        super().mouseReleaseEvent(event)
 
 
 class FormatHintPanel(QFrame):
@@ -1546,6 +1456,17 @@ class UnknownFormatDialog(QDialog):
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть:\n{e}")
 
     def _apply_format_by_name(self, name):
+        # Если кликнули по ячейке A0xN — находим исходный A0xN-формат
+        a0_key = None
+        for key, printable_wh in A0_PRINTABLE_MM.items():
+            if PRINTABLE_A0_SIZE_NAMES[printable_wh] == name:
+                a0_key = key
+                break
+        if a0_key:
+            self.result_action = "a0_oversize"
+            self.result_value = a0_key
+            self.accept()
+            return
         self._apply_format(preset=name)
 
     def _apply_format(self, preset=None):
@@ -1754,6 +1675,37 @@ class AnalysisThread(QThread):
                             if action=="skip": pass
                             elif action=="format":
                                 key=f"{value} {kind}"; grand[key]+=len(pages); ff[key]+=len(pages); fp[key].extend(pages)
+                            elif action == "a0_oversize":
+                                # Печатаем A0xN на рулоне 910 мм (по большей стороне печатаемого)
+                                a0_key = value
+                                pw, ph = A0_PRINTABLE_MM[a0_key]
+                                ow, oh = A0_OVERSIZE_MM[a0_key]
+                                key = f"{a0_key} {kind}"
+                                grand[key] += len(pages)
+                                ff[key] += len(pages)
+                                fp[key].extend(pages)
+                                # Добавляем в рулон по большей стороне печатаемого формата
+                                mm = max(pw, ph) * len(pages)
+                                if col:
+                                    grand["Рулон цвет мм"] += mm
+                                    frc += mm
+                                    frc_p.extend(pages)
+                                else:
+                                    grand["Рулон ч/б мм"] += mm
+                                    frb += mm
+                                    frb_p.extend(pages)
+                                # Сохраняем как отдельную A0-группу для CRM и клиента
+                                file_roll_groups.append({
+                                    "w": ow, "h": oh, "color": col,
+                                    "count": len(pages),
+                                    "per_page_mm": max(pw, ph),
+                                    "total_mm": mm,
+                                    "pages": sorted(pages),
+                                    "cutting": False,
+                                    "a0_key": a0_key,
+                                    "printable_w": pw,
+                                    "printable_h": ph,
+                                })
                             elif action in ("roll_mm", "roll_auto"):
                                 if isinstance(value, tuple):
                                     ppm, need_cut = float(value[0]), bool(value[1])
@@ -1784,12 +1736,130 @@ class AnalysisThread(QThread):
 # ─────────────────────────────────────────────────────────────────────────────
 # Главное окно
 # ─────────────────────────────────────────────────────────────────────────────
+class DropArea(QFrame):
+    """Область только для перетаскивания файлов/папок."""
+
+    files_dropped = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(110)
+
+        self._default_style = (
+            "DropArea { background-color: #fafbfc; border: 2px dashed #b3d4f5; "
+            "border-radius: 8px; }"
+        )
+        self._hover_style = (
+            "DropArea { background-color: #d6eaff; border: 2px dashed #0066cc; "
+            "border-radius: 8px; }"
+        )
+        self._selected_style = (
+            "DropArea { background-color: #ecf7ec; border: 2px dashed #2e7d32; "
+            "border-radius: 8px; }"
+        )
+        self.setStyleSheet(self._default_style)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.icon_label = QLabel("📥")
+        self.icon_label.setFont(QFont("Arial", 22))
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setStyleSheet("background:transparent;border:none;")
+        layout.addWidget(self.icon_label)
+
+        self.title_label = QLabel("Переместите сюда папку или файл")
+        self.title_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title_label.setStyleSheet(
+            "color:#0066cc;background:transparent;border:none;"
+        )
+        self.title_label.setWordWrap(True)
+        layout.addWidget(self.title_label)
+
+    def set_selected_path(self, path, info_suffix=""):
+        self.setStyleSheet(self._selected_style)
+        self.icon_label.setText("")
+        self.icon_label.setVisible(False)
+        display = path if not info_suffix else f"{path}  {info_suffix}"
+        self.title_label.setText(display)
+        self.title_label.setFont(QFont("Arial", 9))
+        self.title_label.setWordWrap(False)
+        self.title_label.setStyleSheet(
+            "color:#2e7d32;background:transparent;border:none;"
+        )
+        self.title_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+    def reset(self):
+        self.setStyleSheet(self._default_style)
+        self.icon_label.setText("📥")
+        self.icon_label.setVisible(True)
+        self.title_label.setText("Переместите сюда папку или файл")
+        self.title_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(
+            "color:#0066cc;background:transparent;border:none;"
+        )
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            event.ignore()
+            return
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            if os.path.isdir(path) or path.lower().endswith(".pdf"):
+                event.acceptProposedAction()
+                self.setStyleSheet(self._hover_style)
+                return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        # Если иконка скрыта — значит путь выбран
+        if not self.icon_label.isVisible():
+            self.setStyleSheet(self._selected_style)
+        else:
+            self.setStyleSheet(self._default_style)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            event.ignore()
+            return
+        paths = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            p = url.toLocalFile()
+            if os.path.isdir(p) or p.lower().endswith(".pdf"):
+                paths.append(p)
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.files_dropped.emit(paths)
+
 
 class PrintingCalculator(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Калькулятор расчёта проектной документации")
         self.setGeometry(100,100,1200,700)
+        self.setAcceptDrops(True)
         icon_path = resource_path("logo.ico")
         if os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
         self.primary_color="#0066cc"; self.danger_color="#d33"; self.bg_color="#f5f6f7"
@@ -1797,11 +1867,20 @@ class PrintingCalculator(QMainWindow):
         self.apply_style()
         self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
         self.selected_path=""; self.copies=1; self.force_bw=False; self.count_fill=True
+        self._dropped_pdfs = None
         self.need_folding_a4=self.need_folding_a3=False
         self.need_binding_a4=self.need_binding_a3=False
         self.thread=self.current_dialog=None; self._history_items=[]
         self.init_ui()
         QTimer.singleShot(100, self.refresh_history)
+
+    def _apply_selected_path(self, path):
+        if not path or not os.path.exists(path):
+            self.label_status.setText("❌ Путь не существует")
+            return
+        self.selected_path = path
+        self._dropped_pdfs = None
+        self.drop_area.set_selected_path(path)
 
     def save_details_txt(self):
         text=self.text_details.toPlainText().strip()
@@ -1882,11 +1961,48 @@ class PrintingCalculator(QMainWindow):
 
     def create_input_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(15); lay.setContentsMargins(20,20,20,20)
-        ff=QFrame(); fl=QVBoxLayout(ff); fl.addWidget(self._bold_label("📁 Папка или файл PDF:"))
-        row=QHBoxLayout(); self.label_path=QLabel("Путь не выбран"); self.label_path.setStyleSheet("color:#666;padding:5px;background:transparent;"); row.addWidget(self.label_path)
-        bb=QPushButton("📂 Выбрать папку..."); bb.clicked.connect(self.browse_path); row.addWidget(bb)
-        bb_file=QPushButton("📄 Выбрать файл..."); bb_file.clicked.connect(self.browse_file); row.addWidget(bb_file)
-        fl.addLayout(row); lay.addWidget(ff)
+        ff = QFrame()
+        ff.setStyleSheet("QFrame { background: transparent; border: none; }")
+        fl = QVBoxLayout(ff)
+        fl.setContentsMargins(0, 0, 0, 0)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        # Слева — область для DnD
+        self.drop_area = DropArea()
+        self.drop_area.files_dropped.connect(self._handle_dropped_paths)
+        row.addWidget(self.drop_area, stretch=1)
+
+        # Справа — кнопки
+        btns_frame = QFrame()
+        btns_frame.setStyleSheet(
+            "QFrame { background: transparent; border: none; }"
+        )
+        btns_layout = QVBoxLayout(btns_frame)
+        btns_layout.setContentsMargins(0, 0, 0, 0)
+        btns_layout.setSpacing(8)
+
+        btn_folder = QPushButton("📂  Папка")
+        btn_folder.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        btn_folder.setMinimumHeight(48)
+        btn_folder.setMinimumWidth(180)
+        btn_folder.clicked.connect(self.browse_path)
+        btns_layout.addWidget(btn_folder)
+
+        btn_file = QPushButton("📄  Файл")
+        btn_file.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        btn_file.setMinimumHeight(48)
+        btn_file.setMinimumWidth(180)
+        btn_file.clicked.connect(self.browse_file)
+        btns_layout.addWidget(btn_file)
+
+        row.addWidget(btns_frame, stretch=0)
+        fl.addLayout(row)
+
+        # Сохраняем label_path как ссылку на title — чтобы не ломать остальной код
+        self.label_path = self.drop_area.title_label
+        lay.addWidget(ff)
         cf=QFrame(); cl=QVBoxLayout(cf); cl.addWidget(self._bold_label("🎨 Цветность:"))
         cr=QHBoxLayout(); self.rb_color_auto=QRadioButton("По файлу"); self.rb_color_bw=QRadioButton("Ч/б"); self.rb_color_auto.setChecked(True)
         self.color_mode_group=QButtonGroup(self); self.color_mode_group.addButton(self.rb_color_auto); self.color_mode_group.addButton(self.rb_color_bw)
@@ -2011,8 +2127,11 @@ class PrintingCalculator(QMainWindow):
         btn_folder.clicked.connect(self.open_history_folder); btns.addWidget(btn_folder); lay.addLayout(btns); return w
 
     def browse_path(self):
-        p=QFileDialog.getExistingDirectory(self,"Выберите папку с PDF файлами")
-        if p: self.selected_path=p; self.label_path.setText(f"✓ {p}")
+        p = QFileDialog.getExistingDirectory(self, "Выберите папку с PDF файлами")
+        if p:
+            self.selected_path = p
+            self._dropped_pdfs = None
+            self.drop_area.set_selected_path(p)
 
     def browse_file(self):
         p, _ = QFileDialog.getOpenFileName(
@@ -2021,7 +2140,8 @@ class PrintingCalculator(QMainWindow):
         )
         if p:
             self.selected_path = p
-            self.label_path.setText(f"✓ {p}")
+            self._dropped_pdfs = None
+            self.drop_area.set_selected_path(p)
 
     def _update_fill_checkbox(self):
         auto = self.rb_color_auto.isChecked()
@@ -2034,11 +2154,28 @@ class PrintingCalculator(QMainWindow):
         self.need_binding_a4=self.rb_binding_a4.isChecked(); self.need_binding_a3=self.rb_binding_a3.isChecked(); self.calculate_and_display()
 
     def start_analysis(self):
-        if not self.selected_path: self.label_status.setText("❌ Выберите папку или файл"); return
-        if not os.path.exists(self.selected_path): self.label_status.setText("❌ Путь не существует"); return
-        if self.selected_path.lower().endswith(".pdf"): pdfs=[self.selected_path]
-        else: pdfs=[os.path.join(r,f) for r,_,fs in os.walk(self.selected_path) for f in fs if f.lower().endswith(".pdf")]
-        if not pdfs: self.label_status.setText("❌ PDF файлы не найдены"); return
+        # Приоритет — перетянутые файлы (если есть)
+        if self._dropped_pdfs:
+            pdfs = list(self._dropped_pdfs)
+        else:
+            if not self.selected_path:
+                self.label_status.setText("❌ Выберите папку или файл")
+                return
+            if not os.path.exists(self.selected_path):
+                self.label_status.setText("❌ Путь не существует")
+                return
+            if self.selected_path.lower().endswith(".pdf"):
+                pdfs = [self.selected_path]
+            else:
+                pdfs = [
+                    os.path.join(r, f)
+                    for r, _, fs in os.walk(self.selected_path)
+                    for f in fs
+                    if f.lower().endswith(".pdf")
+                ]
+        if not pdfs:
+            self.label_status.setText("❌ PDF файлы не найдены")
+            return
         self.force_bw=self.rb_color_bw.isChecked()
         count_fill = self.cb_count_fill.isChecked() and not self.force_bw
         self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
@@ -2116,8 +2253,11 @@ class PrintingCalculator(QMainWindow):
         try:
             self.grand=data.get('grand',{}); self.total_source=data.get('source',{}).get('total_pages',0)
             self.file_page_counts=data.get('file_page_counts',[]); self.file_details=data.get('file_details',[])
-            self.selected_path=data.get('source',{}).get('path','')
-            if self.selected_path: self.label_path.setText(f"✓ {self.selected_path}")
+            self.selected_path = data.get('source', {}).get('path', '')
+            if self.selected_path:
+                self.drop_area.set_selected_path(self.selected_path)
+            else:
+                self.drop_area.reset()
             params=data.get('params',{}); self.copies=params.get('copies',1); self.force_bw=params.get('force_bw',False)
             self.spinbox_copies.blockSignals(True); self.spinbox_copies.setValue(self.copies); self.spinbox_copies.blockSignals(False)
             folding=params.get('folding')
@@ -2409,9 +2549,13 @@ class PrintingCalculator(QMainWindow):
                 if f in FMT_ORDER: return (0,FMT_ORDER.index(f),k or "")
                 if f in ISO_A_NONSTANDARD: return (1,list(ISO_A_NONSTANDARD).index(f),k or "")
                 return (2,f or "",k or "")
+
             for k, _cnt in sorted(fmts.items(), key=sk):
                 f, kn = self._pfk(k)
                 if not f:
+                    continue
+                # A0xN не выводим здесь — они показываются ниже как roll_groups
+                if f in UNPRINTABLE_FORMATS:
                     continue
                 pages = pm.get(k, [])
                 sz = self._gfs(f)
@@ -2420,7 +2564,19 @@ class PrintingCalculator(QMainWindow):
             for rg in fd.get("roll_groups", []):
                 kind_str = "цвет" if rg["color"] else "ч/б"
                 rng = compact_page_list(rg["pages"])
-                line = f"    Рулон {kind_str} ({rg['w']:.0f}×{rg['h']:.0f} мм) — {rg['count']} стр."
+                if rg.get("a0_key"):
+                    pw = rg["printable_w"]
+                    ph = rg["printable_h"]
+                    line = (
+                        f"    {rg['a0_key']} {kind_str} "
+                        f"({rg['w']:.0f}×{rg['h']:.0f} мм) → "
+                        f"{pw}×{ph} — {rg['count']} стр."
+                    )
+                else:
+                    line = (
+                        f"    Рулон {kind_str} "
+                        f"({rg['w']:.0f}×{rg['h']:.0f} мм) — {rg['count']} стр."
+                    )
                 if rg.get("cutting"):
                     line += " [резка]"
                 if rng:
@@ -2504,46 +2660,80 @@ class PrintingCalculator(QMainWindow):
                 cnt=int(self.grand.get(f"{fmt} {kind}",0))
                 if cnt>0: q=cnt*c; sb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр."); tpr+=q
         nb = []
+        # Обычные расширенные форматы
         for fmt, (fw, fh) in ISO_A_NONSTANDARD.items():
+            if fmt in UNPRINTABLE_FORMATS:
+                continue
             for kind in KIND_ORDER:
                 cnt = int(self.grand.get(f"{fmt} {kind}", 0))
                 if cnt > 0:
                     q = cnt * c
                     tpr += q
-                    # Для форматов A0xN — не печатаем, указываем ближайший
-                    if fmt in UNPRINTABLE_FORMATS:
-                        if fmt in A0_PRINTABLE_MM:
-                            pw, ph = A0_PRINTABLE_MM[fmt]
-                            nb.append(
-                                f"{fmt} {kind} ({fw}×{fh} мм) "
-                                f"→ печатаем {pw}×{ph} мм — {q} стр."
-                            )
-                        else:
-                            nb.append(
-                                f"{fmt} {kind} ({fw}×{fh} мм) "
-                                f"[не печатаем] — {q} стр."
-                            )
-                    else:
-                        nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
-        cb=[]
-        for k in self.grand:
-            if k.startswith("Рулон") or k.startswith("_roll_fold_"): continue
-            fmt,kind=self._pfk(k)
-            if not fmt or not kind or fmt in ISO_A or fmt in ISO_A_NONSTANDARD: continue
-            cnt=int(self.grand.get(k,0))
-            if cnt>0: q=cnt*c; cb.append(f"{fmt} {kind} — {q} стр."); tpr+=q
-        rb_lines=[]
+                    nb.append(f"{fmt} {kind} ({fw}×{fh} мм) — {q} стр.")
+
+        # A0xN — добавляем в тот же блок с указанием печатаемого размера и масштаба
+        a0_agg = defaultdict(int)  # {(a0_key, kind, ow, oh, pw, ph): qty}
         for fd in self.file_details:
-            for rg in fd.get("roll_groups",[]):
-                kind_str="цвет" if rg.get("color") else "ч/б"; w=rg.get("w",0); h=rg.get("h",0); count=rg.get("count",0)
-                if count<=0: continue
-                q=count*c; tpr+=q; rb_lines.append(f"{w:.0f}×{h:.0f} мм {kind_str} — {q} шт.")
+            for rg in fd.get("roll_groups", []):
+                if not rg.get("a0_key"):
+                    continue
+                count = rg.get("count", 0)
+                if count <= 0:
+                    continue
+                kind_str = "цвет" if rg.get("color") else "ч/б"
+                key = (
+                    rg["a0_key"], kind_str,
+                    int(rg["w"]), int(rg["h"]),
+                    rg["printable_w"], rg["printable_h"],
+                )
+                a0_agg[key] += count * c
+        for (a0_key, kind_str, ow, oh, pw, ph), qty in sorted(a0_agg.items()):
+            scale = min(pw / ow, ph / oh) * 100
+            nb.append(
+                f"{a0_key} {kind_str} ({ow}×{oh} мм) → {pw}×{ph} "
+                f"(масштаб {scale:.1f}%) — {qty} шт."
+            )
+            tpr += qty
+        cb = []
+        for k in self.grand:
+            if k.startswith("Рулон") or k.startswith("_roll_fold_"):
+                continue
+            fmt, kind = self._pfk(k)
+            if not fmt or not kind:
+                continue
+            if fmt in ISO_A or fmt in ISO_A_NONSTANDARD:
+                continue
+            # A0xN — не выводим в "Произвольных", они идут в "Печать на рулоне"
+            if fmt in UNPRINTABLE_FORMATS:
+                continue
+            cnt = int(self.grand.get(k, 0))
+            if cnt > 0:
+                q = cnt * c
+                cb.append(f"{fmt} {kind} — {q} стр.")
+                tpr += q
+        rb_lines = []
+        for fd in self.file_details:
+            for rg in fd.get("roll_groups", []):
+                # A0xN уже учтены выше в nb
+                if rg.get("a0_key"):
+                    continue
+                count = rg.get("count", 0)
+                if count <= 0:
+                    continue
+                q = count * c
+                tpr += q
+                kind_str = "цвет" if rg.get("color") else "ч/б"
+                w = rg.get("w", 0)
+                h = rg.get("h", 0)
+                rb_lines.append(f"{w:.0f}×{h:.0f} мм {kind_str} — {q} шт.")
+
         if rb_lines:
-            agg=defaultdict(int)
+            agg = defaultdict(int)
             for line in rb_lines:
-                m=re.match(r'(.+?) — (\d+) шт\.$',line)
-                if m: agg[m.group(1)]+=int(m.group(2))
-            rb_lines=[f"{k} — {v} шт." for k,v in agg.items()]
+                m = re.match(r'(.+?) — (\d+) шт\.$', line)
+                if m:
+                    agg[m.group(1)] += int(m.group(2))
+            rb_lines = [f"{k} — {v} шт." for k, v in agg.items()]
         cms="Ч/б (принудительно)" if self.force_bw else "По файлу"
         lines=["="*60,"АНАЛИЗ ПРОЕКТНОЙ ДОКУМЕНТАЦИИ","="*60,f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
             f"Всего страниц в источнике: {self.total_source}",f"Количество экземпляров: {c}",f"Режим цветности: {cms}","",
@@ -2556,10 +2746,14 @@ class PrintingCalculator(QMainWindow):
             if sb or nb: lines.append("")
             lines.append("• Произвольные форматы:"); lines.extend(f"  {l}" for l in cb)
         if rb_lines:
-            if sb or nb or cb: lines.append("")
-            lines.append("• Нестандартные/рулонные форматы:"); lines.extend(f"  {l}" for l in rb_lines)
-        if not (sb or nb or cb or rb_lines): lines.append("Нет данных")
-        lines.append(f"Итого страниц: {tpr}"); lines.append("")
+            if sb or nb or cb:
+                lines.append("")
+            lines.append("• Нестандартные/рулонные форматы:")
+            lines.extend(f"  {l}" for l in rb_lines)
+        if not (sb or nb or cb or rb_lines):
+            lines.append("Нет данных")
+        lines.append(f"Итого страниц: {tpr}")
+        lines.append("")
         if ft:
             lines.append(f"ФАЛЬЦОВКА ПОД {ft}:")
             if fs: lines.append("• Стандартные форматы:"); lines.extend(f"  {l}" for l in fs)
@@ -2598,6 +2792,76 @@ class PrintingCalculator(QMainWindow):
                 self.btn_copy_report.setStyleSheet(self._copy_btn_style),
             ),
         )
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            event.ignore()
+            return
+        # Принимаем, если хотя бы один путь — это PDF или папка
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            if os.path.isdir(path) or path.lower().endswith(".pdf"):
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            event.ignore()
+            return
+        paths = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            p = url.toLocalFile()
+            if os.path.isdir(p) or p.lower().endswith(".pdf"):
+                paths.append(p)
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._handle_dropped_paths(paths)
+
+    def _handle_dropped_paths(self, paths):
+        """Обработка перетянутых файлов/папок."""
+        if len(paths) == 1:
+            self.selected_path = paths[0]
+            self._dropped_pdfs = None
+            self.drop_area.set_selected_path(paths[0])
+            self.label_status.setText("📥 Готово — нажмите «Начать анализ»")
+            return
+        # Несколько объектов
+        pdfs = []
+        for p in paths:
+            if os.path.isdir(p):
+                for r, _, fs in os.walk(p):
+                    for f in fs:
+                        if f.lower().endswith(".pdf"):
+                            pdfs.append(os.path.join(r, f))
+            elif p.lower().endswith(".pdf"):
+                pdfs.append(p)
+        if not pdfs:
+            self.label_status.setText("❌ PDF файлы не найдены в перетянутых объектах")
+            return
+        self._dropped_pdfs = pdfs
+        common_dir = (
+            os.path.commonpath([os.path.dirname(p) for p in pdfs])
+            if len(pdfs) > 1 else os.path.dirname(pdfs[0])
+        )
+        self.selected_path = common_dir
+        self.drop_area.set_selected_path(
+            common_dir, info_suffix=f"({len(pdfs)} PDF)"
+        )
+        self.label_status.setText(f"📥 Перетянуто {len(pdfs)} PDF — нажмите «Начать анализ»")
 
     def closeEvent(self, event):
         if self.thread and self.thread.isRunning(): self.thread.request_stop(); self.thread.wait(2000)
