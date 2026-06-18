@@ -114,7 +114,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -1367,7 +1367,7 @@ class UnknownFormatDialog(QDialog):
         ba.clicked.connect(self._apply_auto)
         roll_row.addWidget(ba)
         self.chk_cutting = QCheckBox("Резка")
-        self.chk_cutting.setChecked(False)
+        self.chk_cutting.setChecked(True)
         self.chk_cutting.setStyleSheet("color:#333;background:transparent;")
         roll_row.addWidget(self.chk_cutting)
         roll_row.addStretch()
@@ -2635,6 +2635,8 @@ class PrintingCalculator(QMainWindow):
             if nlr:
                 if slr: ftp.append("")
                 ftp.append("Нестандартные/рулонные форматы:"); ftp.extend(nlr)
+                nlt = sum(int(l.rsplit("—", 1)[-1].strip().split()[0]) for l in nlr)
+                ftp.append(f"Итого нестандартных фальцовок: {nlt}")
         self.text_folding.setText("\n".join(ftp) if ftp else "Фальцовка не требуется")
 
         blines,tb,bt=[],0,None
