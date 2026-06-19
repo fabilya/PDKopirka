@@ -114,11 +114,10 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.2"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
-GITHUB_TOKEN = os.environ.get("PDKOPIRKA_GITHUB_TOKEN", "").strip()
 
 
 def _make_ssl_context_certifi():
@@ -384,9 +383,7 @@ def check_for_update():
         req = urllib.request.Request(UPDATE_API_URL)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
         req.add_header("Accept", "application/vnd.github.v3+json")
-        if GITHUB_TOKEN:
-            req.add_header("Authorization", f"token {GITHUB_TOKEN}")
-        with _urlopen_safe(req, timeout=15) as resp:
+        with _urlopen_safe(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         latest_tag = data.get("tag_name", "")
         if not latest_tag:
@@ -402,19 +399,13 @@ def check_for_update():
             if name_lower.endswith(".exe") and (
                 "setup" in name_lower or "install" in name_lower
             ):
-                if GITHUB_TOKEN:
-                    download_url = asset["url"]
-                else:
-                    download_url = asset["browser_download_url"]
+                download_url = asset["browser_download_url"]
                 break
         # Запасной вариант — любой .exe
         if not download_url:
             for asset in assets:
                 if asset["name"].lower().endswith(".exe"):
-                    if GITHUB_TOKEN:
-                        download_url = asset["url"]
-                    else:
-                        download_url = asset["browser_download_url"]
+                    download_url = asset["browser_download_url"]
                     break
         if not download_url:
             return False, None, None, f"В релизе {latest_tag} не найден .exe файл."
@@ -438,9 +429,7 @@ def download_update(url, target_path, progress_callback=None):
                     pass
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
-        if GITHUB_TOKEN:
-            req.add_header("Authorization", f"token {GITHUB_TOKEN}")
-            req.add_header("Accept", "application/octet-stream")
+        req.add_header("Accept", "application/octet-stream")
         with _urlopen_safe(req, timeout=300) as resp:
             total_size = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
@@ -635,6 +624,14 @@ class UpdateDialog(QDialog):
 def _changelog_html(version):
     return f"""
 <h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    📐 Нестандартные форматы
+</h3>
+<ul>
+    <li>Добавлена резка нестандартных форматов по умолчанию — теперь программа сама предлагает оптимальный вариант резки для всех нестандартных листов</li>
+    <li>Добавлен подсчёт фальцовок нестандартных форматов во вкладке менеджера (CRM) — точное количество сгибов для каждого листа</li>
+</ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     📂 Выбор файлов и папок
@@ -940,7 +937,7 @@ def check_remote_license():
         req.add_header("User-Agent", "PDKopirka/1.0")
         req.add_header("Cache-Control", "no-cache, no-store, must-revalidate")
         req.add_header("Pragma", "no-cache")
-        with _urlopen_safe(req, timeout=15) as resp:
+        with _urlopen_safe(req, timeout=5) as resp:
             raw = resp.read().decode("utf-8-sig", errors="replace")
         token = _extract_token_from_gist(raw)
         if not token:
@@ -968,10 +965,8 @@ def check_remote_license():
             "В Gist должен быть токен ACTIVE или BLOCKED."
         )
     except urllib.error.URLError:
-        return False, (
-            "Не удалось проверить лицензию.\n\n"
-            "Проверьте подключение к интернету."
-        )
+        # Если gist недоступен — не блокируем (fail-open)
+        return True, ""
     except Exception as e:
         return False, f"Ошибка проверки лицензии:\n{e}"
 
@@ -1592,7 +1587,7 @@ class AnalysisThread(QThread):
                     return True
 
             # Проверка 2: светлые цветные пиксели (пастельные фоны)
-            not_pure_white = mx < 254
+            not_pure_white = (mx > 180) & (mx < 254)
             pastel = not_pure_white & (diff >= 5)
             total_pixels = a.shape[0] * a.shape[1]
             pastel_count = int(pastel.sum())
@@ -2871,6 +2866,13 @@ class PrintingCalculator(QMainWindow):
         super().closeEvent(event)
 
 
+def _check_update_background():
+    has_update, latest_ver, dl_url, _upd_err = check_for_update()
+    if has_update:
+        _mark_update_attempt(latest_ver)
+        UpdateDialog(latest_ver, dl_url).exec()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Точка входа
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2891,17 +2893,15 @@ def main():
 
     _create_single_instance_mutex()
 
-    # Обновление без запроса (только в exe)
-    if getattr(sys, "frozen", False):
-        _clear_update_settings_if_current()
-        has_update, latest_ver, dl_url, _upd_err = check_for_update()
-        if has_update:
-            _mark_update_attempt(latest_ver)
-            UpdateDialog(latest_ver, dl_url).exec()
-
     # Главное окно
     window = PrintingCalculator()
     window.show()
+
+    # Проверка обновлений после показа окна (не блокирует запуск)
+    if getattr(sys, "frozen", False):
+        _clear_update_settings_if_current()
+        QTimer.singleShot(1000, lambda: _check_update_background())
+
     sys.exit(app.exec())
 
 
