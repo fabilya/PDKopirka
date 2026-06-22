@@ -24,7 +24,7 @@ from PIL import Image
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QCheckBox,
-    QTableWidget, QTableWidgetItem, QTextEdit, QProgressBar, QFrame,
+    QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QTextEdit, QProgressBar, QFrame,
     QScrollArea, QDialog, QLineEdit, QMessageBox, QGroupBox,
     QRadioButton, QButtonGroup, QSizePolicy, QHeaderView, QGridLayout
 )
@@ -114,10 +114,11 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.2.2"
+APP_VERSION = "2.3.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_LIST_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=5"
 
 
 def _make_ssl_context_certifi():
@@ -377,45 +378,73 @@ def bring_window_to_front(window):
         pass
 
 
+def _find_asset_in_release(data):
+    """Ищет .exe установщик в данных одного релиза. Возвращает (latest_tag, download_url) или (None, None)."""
+    tag = data.get("tag_name", "")
+    if not tag:
+        return None, None
+    for asset in data.get("assets", []):
+        name_lower = asset["name"].lower()
+        if name_lower.endswith(".exe") and (
+            "setup" in name_lower or "install" in name_lower
+        ):
+            return tag, asset["browser_download_url"]
+    for asset in data.get("assets", []):
+        if asset["name"].lower().endswith(".exe"):
+            return tag, asset["browser_download_url"]
+    return tag, None
+
+
+def _fetch_json(url, timeout=5):
+    """Выполняет GET-запрос к GitHub API и возвращает распарсенный JSON."""
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", "PDKopirka-Updater/1.0")
+    req.add_header("Accept", "application/vnd.github.v3+json")
+    with _urlopen_safe(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def check_for_update():
-    """Ищет установщик (.exe) в последнем релизе."""
+    """Ищет установщик (.exe) в последнем релизе.
+    Сначала пробует /releases/latest, при ошибке — /releases?per_page=5."""
+    current = get_app_version()
+
+    # Попытка 1: /releases/latest
     try:
-        req = urllib.request.Request(UPDATE_API_URL)
-        req.add_header("User-Agent", "PDKopirka-Updater/1.0")
-        req.add_header("Accept", "application/vnd.github.v3+json")
-        with _urlopen_safe(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        latest_tag = data.get("tag_name", "")
-        if not latest_tag:
-            return False, None, None, "GitHub вернул пустой tag_name."
-        current = get_app_version()
-        if _parse_version(latest_tag) <= _parse_version(current):
-            return False, None, None, None
-        assets = data.get("assets", [])
-        download_url = None
-        # Сначала ищем установщик (с "setup" или "install" в имени)
-        for asset in assets:
-            name_lower = asset["name"].lower()
-            if name_lower.endswith(".exe") and (
-                "setup" in name_lower or "install" in name_lower
-            ):
-                download_url = asset["browser_download_url"]
-                break
-        # Запасной вариант — любой .exe
-        if not download_url:
-            for asset in assets:
-                if asset["name"].lower().endswith(".exe"):
-                    download_url = asset["browser_download_url"]
-                    break
-        if not download_url:
-            return False, None, None, f"В релизе {latest_tag} не найден .exe файл."
-        return True, latest_tag, download_url, None
-    except urllib.error.HTTPError as e:
-        return False, None, None, f"HTTP ошибка: {e.code} {e.reason}"
-    except urllib.error.URLError as e:
-        return False, None, None, f"Нет доступа к GitHub: {e.reason}"
+        data = _fetch_json(UPDATE_API_URL)
+        tag, dl_url = _find_asset_in_release(data)
+        if tag and dl_url and _parse_version(tag) > _parse_version(current):
+            return True, tag, dl_url, None
     except Exception as e:
-        return False, None, None, f"{type(e).__name__}: {e}"
+        last_err = f"latest endpoint: {type(e).__name__}: {e}"
+
+    # Попытка 2: список последних релизов
+    try:
+        releases = _fetch_json(UPDATE_LIST_URL, timeout=10)
+        if isinstance(releases, list):
+            best_tag, best_url, best_err = None, None, None
+            for rel in releases:
+                tag, dl_url = _find_asset_in_release(rel)
+                if tag and dl_url:
+                    if _parse_version(tag) > _parse_version(current):
+                        if best_tag is None or _parse_version(tag) > _parse_version(best_tag):
+                            best_tag, best_url = tag, dl_url
+                    elif _parse_version(tag) == _parse_version(current):
+                        pass  # та же версия — пропускаем
+                else:
+                    if tag and not dl_url:
+                        best_err = f"В релизе {tag} нет .exe файла"
+            if best_tag and best_url:
+                return True, best_tag, best_url, None
+            if best_err and not best_tag:
+                return False, None, None, best_err
+            if not best_tag:
+                return False, None, None, "Новых версий не найдено."
+    except Exception as e:
+        err = getattr(last_err, "str", None) or f"list endpoint: {type(e).__name__}: {e}"
+        return False, None, None, err
+
+    return False, None, None, last_err
 
 
 def download_update(url, target_path, progress_callback=None):
@@ -604,11 +633,14 @@ class UpdateDialog(QDialog):
         QApplication.processEvents()
         ok = download_update(self.download_url, new_installer, on_progress)
         if not ok:
-            self.status_lbl.setText("❌ Ошибка загрузки.")
-            self.progress.setValue(0)
-            QApplication.processEvents()
-            time.sleep(3)
-            os._exit(1)
+            self.accept()
+            QMessageBox.critical(
+                None, "Ошибка обновления",
+                "Не удалось скачать обновление. Проверьте подключение к интернету "
+                "и повторите попытку позже.\n\n"
+                "Вы также можете скачать установщик вручную:\n"
+                "https://github.com/fabilya/PDKopirka/releases/latest"
+            )
             return
         self.progress.setValue(100)
         self.status_lbl.setText("✅ Запуск установщика...")
@@ -626,11 +658,37 @@ def _changelog_html(version):
 <h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🎨 Вкладка «Заливка страниц»
+</h3>
+<ul>
+    <li>Новая вкладка с деревом файлов и процентов заливки для каждой страницы</li>
+    <li>Для цветных страниц — процент цветной заливки, для ч/б — процент покрытия тонером</li>
+    <li>Кнопки «Развернуть все» / «Свернуть все», цветовая градация процента</li>
+    <li>Работает при включённой опции «Учитывать заливку цветом»</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🐛 Исправление определения цветности
+</h3>
+<ul>
+    <li>Исправлен алгоритм определения цветности — тёмные около-серые пиксели больше не влияют на результат</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
     📐 Нестандартные форматы
 </h3>
 <ul>
-    <li>Добавлена резка нестандартных форматов по умолчанию — теперь программа сама предлагает оптимальный вариант резки для всех нестандартных листов</li>
     <li>Добавлен подсчёт фальцовок нестандартных форматов во вкладке менеджера (CRM) — точное количество сгибов для каждого листа</li>
+    <li>Чекбокс «Резка» в диалоге нестандартных форматов теперь по умолчанию выключен — пользователь сам решает</li>
+</ul>
+
+<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
+    🔄 Проверка обновлений
+</h3>
+<ul>
+    <li>Добавлена кнопка ручной проверки обновлений на вкладке «Параметры»</li>
+    <li>Улучшен механизм проверки — при ошибке /releases/latest выполняется fallback на список релизов</li>
+    <li>При ошибке загрузки обновления показывается сообщение (вместо аварийного завершения)</li>
 </ul>
 
 <h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
@@ -1362,7 +1420,7 @@ class UnknownFormatDialog(QDialog):
         ba.clicked.connect(self._apply_auto)
         roll_row.addWidget(ba)
         self.chk_cutting = QCheckBox("Резка")
-        self.chk_cutting.setChecked(True)
+        self.chk_cutting.setChecked(False)
         self.chk_cutting.setStyleSheet("color:#333;background:transparent;")
         roll_row.addWidget(self.chk_cutting)
         roll_row.addStretch()
@@ -1624,6 +1682,34 @@ class AnalysisThread(QThread):
         except Exception:
             return False
 
+    def calc_page_fill_pct(self, page, tol=12, white_thr=252):
+        """Возвращает (цветная_заливка%, чб_заливка%) — (0.0–100.0, 0.0–100.0)."""
+        try:
+            scale = 200 / 72
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
+            )
+            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            a = np.asarray(img, dtype=np.uint8)
+            if a.ndim != 3:
+                return (0.0, 0.0)
+            r = a[..., 0].astype(np.int16)
+            g = a[..., 1].astype(np.int16)
+            b = a[..., 2].astype(np.int16)
+            mx = np.maximum(np.maximum(r, g), b)
+            mn = np.minimum(np.minimum(r, g), b)
+            diff = mx - mn
+            not_white = mx < white_thr
+            colored = not_white & (diff >= tol)
+            total = a.shape[0] * a.shape[1]
+            if total <= 0:
+                return (0.0, 0.0)
+            color_pct = round(100.0 * int(colored.sum()) / total, 2)
+            ink_pct = round(100.0 * int(not_white.sum()) / total, 2)
+            return (color_pct, ink_pct)
+        except Exception:
+            return (0.0, 0.0)
+
     def match_format_with_tolerance(self, w, h, table, tol=FORMAT_TOLERANCE_MM):
         for name,(fw,fh) in table.items():
             if ((abs(w-fw)<=tol and abs(h-fh)<=tol) or (abs(h-fw)<=tol and abs(w-fh)<=tol)):
@@ -1640,7 +1726,7 @@ class AnalysisThread(QThread):
                         total=len(doc); total_source+=total; file_page_counts.append(total)
                         name=os.path.basename(pdf_path); self.status.emit(f"Анализ: {name} ({total} стр.)")
                         ff=defaultdict(int); fp=defaultdict(list); frb=frc=0.0; frb_p,frc_p=[],[]
-                        cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]
+                        cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]; file_fill_pcts={}
                         for i,p in enumerate(doc):
                             if self._stop_requested: break
                             pn=i+1
@@ -1652,6 +1738,8 @@ class AnalysisThread(QThread):
                             )
                             if has_fill:
                                 file_fill_pages.append(pn)
+                            if self.count_fill:
+                                file_fill_pcts[pn] = self.calc_page_fill_pct(p)
                             fA=self.match_format_with_tolerance(w,h,ISO_A)
                             fN=self.match_format_with_tolerance(w,h,ISO_A_NONSTANDARD)
                             if fA:
@@ -1661,7 +1749,7 @@ class AnalysisThread(QThread):
                             else: cg[(w,h,col)].append(pn)
                             prog=int(100*(file_idx+(i+1)/total)/total_files); self.progress.emit(prog); time.sleep(0.001)
                         if self._stop_requested:
-                            file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages)}); break
+                            file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts}); break
                         for (w,h,col),pages in cg.items():
                             if self._stop_requested: break
                             self.need_user_input.emit(w,h,col,pages,pdf_path); self._wait_for_user()
@@ -1719,7 +1807,7 @@ class AnalysisThread(QThread):
                                 sk = f"{w:.0f}×{h:.0f}"
                                 rfk = f"_roll_fold_{sk}_{kind}"
                                 grand[rfk] = grand.get(rfk, 0) + len(pages)
-                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages)})
+                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts})
                 except Exception as e: self.error.emit(f"Ошибка при обработке {pdf_path}: {e}"); continue
             if self._stop_requested:
                 self.finished.emit(dict(grand),total_source,file_page_counts,file_details); self.stopped.emit()
@@ -1946,6 +2034,7 @@ class PrintingCalculator(QMainWindow):
         self.tabs.addTab(self.create_manager_tab(),"👔 Для менеджера (CRM)")
         self.tabs.addTab(self.create_report_tab(),"📄 Для клиента")
         self.tabs.addTab(self.create_history_tab(),"📚 История расчетов")
+        self.tabs.addTab(self.create_fill_tab(),"🎨 Заливка страниц")
         ml.addWidget(self.tabs)
 
     def _bold_label(self, text, size=11):
@@ -1953,6 +2042,24 @@ class PrintingCalculator(QMainWindow):
 
     def show_whats_new(self):
         WhatsNewDialog(get_app_version(), parent=self).exec()
+
+    def check_update_manual(self):
+        self.label_status.setText("⏳ Проверка обновлений...")
+        QApplication.processEvents()
+        import threading
+        def _do():
+            has_update, latest_ver, dl_url, err = check_for_update()
+            QTimer.singleShot(0, lambda: self._update_check_done(has_update, latest_ver, dl_url, err))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _update_check_done(self, has_update, latest_ver, dl_url, err):
+        if has_update:
+            _mark_update_attempt(latest_ver)
+            UpdateDialog(latest_ver, dl_url).exec()
+        else:
+            msg = err or "Установлена последняя версия."
+            self.label_status.setText(f"📋 {msg}")
+            QMessageBox.information(self, "Проверка обновлений", msg)
 
     def create_input_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(15); lay.setContentsMargins(20,20,20,20)
@@ -2044,7 +2151,10 @@ class PrintingCalculator(QMainWindow):
         lbl_thx.setFont(QFont("Arial",9)); lbl_thx.setStyleSheet("background:transparent;border:none;color:#333;"); lbl_thx.setOpenExternalLinks(True); links_layout.addWidget(lbl_thx); links_layout.addStretch()
         btn_whats_new=QPushButton(f"🎉 Что нового (v{get_app_version()})"); btn_whats_new.setFont(QFont("Arial",9)); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_whats_new.setStyleSheet("QPushButton{background-color:transparent;color:#0066cc;border:1px solid #0066cc;border-radius:4px;padding:4px 10px;font-weight:normal;}QPushButton:hover{background-color:#0066cc;color:white;}")
-        btn_whats_new.clicked.connect(self.show_whats_new); links_layout.addWidget(btn_whats_new); links_layout.addStretch()
+        btn_whats_new.clicked.connect(self.show_whats_new); links_layout.addWidget(btn_whats_new)
+        btn_check_upd=QPushButton("🔄 Проверить обновления"); btn_check_upd.setFont(QFont("Arial",9)); btn_check_upd.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_check_upd.setStyleSheet("QPushButton{background-color:transparent;color:#0066cc;border:1px solid #0066cc;border-radius:4px;padding:4px 10px;font-weight:normal;}QPushButton:hover{background-color:#0066cc;color:white;}")
+        btn_check_upd.clicked.connect(self.check_update_manual); links_layout.addWidget(btn_check_upd); links_layout.addStretch()
         lbl_bug=QLabel('🐛 Сообщить об ошибке: ilya.fabiyanskiy@yandex.ru'); lbl_bug.setFont(QFont("Arial",9))
         lbl_bug.setStyleSheet("background:transparent;border:none;color:#666;"); lbl_bug.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); links_layout.addWidget(lbl_bug)
         lay.addLayout(links_layout); return w
@@ -2120,6 +2230,75 @@ class PrintingCalculator(QMainWindow):
         btn_folder=QPushButton("📁 Открыть папку истории"); btn_folder.setMinimumHeight(40)
         btn_folder.setStyleSheet("QPushButton{background-color:#888;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;}QPushButton:hover{background-color:#666;}")
         btn_folder.clicked.connect(self.open_history_folder); btns.addWidget(btn_folder); lay.addLayout(btns); return w
+
+    def _fill_pct_color(self, pct):
+        if pct<25: return QColor("#2a7a2a")
+        if pct<50: return QColor("#b8860b")
+        if pct<75: return QColor("#cc6600")
+        return QColor("#d33")
+
+    def create_fill_tab(self):
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
+        header=QHBoxLayout(); header.addWidget(self._bold_label("🎨 Процент заливки страниц:")); header.addStretch()
+        btn_expand=QPushButton("▶ Развернуть все"); btn_expand.setFixedHeight(28)
+        btn_expand.clicked.connect(lambda: self.fill_tree.expandAll())
+        header.addWidget(btn_expand)
+        btn_collapse=QPushButton("◀ Свернуть все"); btn_collapse.setFixedHeight(28)
+        btn_collapse.clicked.connect(lambda: self.fill_tree.collapseAll())
+        header.addWidget(btn_collapse)
+        lay.addLayout(header)
+        hint=QLabel("💡 Процент цветной заливки для каждой страницы. Данные собираются только при включённой галочке «Учитывать заливку цветом» в параметрах.")
+        hint.setStyleSheet("color:#666;font-size:10px;padding:4px;background:transparent;"); hint.setWordWrap(True); lay.addWidget(hint)
+        self.fill_tree=QTreeWidget()
+        self.fill_tree.setColumnCount(4)
+        self.fill_tree.setHeaderLabels(["Файл / Страница","Формат","Цветность","Заливка %"])
+        self.fill_tree.setAlternatingRowColors(True)
+        self.fill_tree.setStyleSheet(f"QTreeWidget{{alternate-background-color:#f8f9fa;color:{self.text_color};background-color:white;}}")
+        self.fill_tree.setRootIsDecorated(True)
+        self.fill_tree.setAnimated(True)
+        self.fill_tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        lay.addWidget(self.fill_tree)
+        return w
+
+    def display_fill_pcts(self):
+        self.fill_tree.clear()
+        for fd in self.file_details:
+            fname=fd.get("name","")
+            fill_pcts=fd.get("fill_pcts",{})
+            if not fill_pcts:
+                continue
+            total=fd.get("total",0)
+            pages_map=fd.get("pages",{})
+            page_info={}
+            for key,pages in pages_map.items():
+                fmt,kind=self._pfk(key)
+                for pn in pages:
+                    page_info[pn]=(fmt,kind)
+            root=QTreeWidgetItem([fname])
+            root_font=root.font(0); root_font.setBold(True); root.setFont(0,root_font)
+            total_pct=0
+            for pn in range(1,total+1):
+                val=fill_pcts.get(pn,(0.0,0.0))
+                color_pct,ink_pct=val if isinstance(val,tuple) else (float(val),float(val))
+                fmt,kind=page_info.get(pn,("?","ч/б"))
+                pct=color_pct if kind=="цвет" else ink_pct
+                total_pct+=pct
+                child=QTreeWidgetItem([f"Стр. {pn}",fmt,kind,f"{pct}%"])
+                if kind=="цвет":
+                    child.setForeground(2,QColor("#d33"))
+                child.setForeground(3,self._fill_pct_color(pct))
+                root.addChild(child)
+            avg=total_pct/total if total>0 else 0.0
+            root.setText(1,f"{total} стр.")
+            root.setText(3,f"сред. {avg:.1f}%")
+            root.setForeground(3,self._fill_pct_color(avg))
+            root.setExpanded(True)
+            self.fill_tree.addTopLevelItem(root)
+        if self.fill_tree.topLevelItemCount()>0:
+            header=self.fill_tree.header()
+            header.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+            for col in [1,2,3]:
+                header.setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
 
     def browse_path(self):
         p = QFileDialog.getExistingDirectory(self, "Выберите папку с PDF файлами")
@@ -2200,7 +2379,7 @@ class PrintingCalculator(QMainWindow):
     def analysis_finished(self, grand, total_source, fpc, fd):
         self.grand=grand; self.total_source=total_source; self.file_page_counts=fpc; self.file_details=fd
         if not self.thread or not self.thread._stop_requested: self.label_status.setText("✅ Анализ завершен"); self.progress_bar.setValue(100)
-        self.btn_analyze.setEnabled(True); self.btn_stop.setEnabled(False); self.display_details(); self.calculate_and_display()
+        self.btn_analyze.setEnabled(True); self.btn_stop.setEnabled(False); self.display_details(); self.display_fill_pcts(); self.calculate_and_display()
         if self.grand and not (self.thread and self.thread._stop_requested): self._auto_save_to_history()
 
     def _auto_save_to_history(self):
@@ -2267,7 +2446,7 @@ class PrintingCalculator(QMainWindow):
             else: self.rb_color_auto.setChecked(True)
             self.cb_count_fill.setChecked(params.get('count_fill', False))
             self._update_fill_checkbox()
-            self.display_details(); self.calculate_and_display(); self.tabs.setCurrentIndex(1)
+            self.display_details(); self.display_fill_pcts(); self.calculate_and_display(); self.tabs.setCurrentIndex(1)
             self.label_status.setText(f"📂 Загружен расчёт: {data.get('name','')}")
         except Exception as e: QMessageBox.critical(self,"Ошибка загрузки",f"Не удалось загрузить расчёт:\n{e}")
 
