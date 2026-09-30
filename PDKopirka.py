@@ -991,10 +991,25 @@ class WhatsNewDialog(QDialog):
 
     def _current_entry(self):
         ver = str(self.current_version).lstrip("v").strip()
+        current = None
+        older = []
         for e in _CHANGELOG_HISTORY:
-            if str(e["version"]) == ver:
-                return e
-        return {"version": ver, "date": "", "sections": [("Изменения", ["Список изменений пуст."])]}
+            if current is None:
+                if str(e["version"]) == ver:
+                    current = e
+                continue
+            older.append(e)
+        if current is None:
+            current = {"version": ver, "date": "",
+                       "sections": [("Изменения", ["Список изменений пуст."])]}
+            older = list(_CHANGELOG_HISTORY)
+        # Показываем изменения текущей версии, затем — все предыдущие
+        sections = list(current.get("sections", []))
+        for e in older:
+            for title, items in e.get("sections", []):
+                sections.append((f"{title}  ·  версия {e['version']}", items))
+        return {"version": current["version"], "date": current.get("date", ""),
+                "sections": sections}
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
