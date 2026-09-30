@@ -264,7 +264,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -804,7 +804,7 @@ class UpdateDialog(QDialog):
 
 _CHANGELOG_HISTORY = [
     {
-        "version": "2.3.4",
+        "version": "2.3.5",
         "date": "30.09.2026",
         "sections": [
             ("🎨 Новый дизайн", [
