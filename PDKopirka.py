@@ -26,10 +26,11 @@ from PyQt6.QtWidgets import (
     QTabWidget, QPushButton, QFileDialog, QLabel, QSpinBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QTextEdit, QProgressBar, QFrame,
     QScrollArea, QDialog, QLineEdit, QMessageBox, QGroupBox,
-    QRadioButton, QButtonGroup, QSizePolicy, QHeaderView, QGridLayout
+    QRadioButton, QButtonGroup, QSizePolicy, QHeaderView, QGridLayout,
+    QListWidget, QListWidgetItem, QToolButton
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent
-from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, pyqtProperty, QFileInfo, QSize
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QLinearGradient, QPixmap, QFontMetrics
 import json
 import shutil
 
@@ -41,34 +42,183 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Принудительная светлая палитра
+# Дизайн-токены (Material 3 structure + Apple-подобная полировка)
 # ─────────────────────────────────────────────────────────────────────────────
+
+THEME = {
+    # Палитра 1:1 как в web-версии kopirka-maket.ru/pdkopirka (iOS/MD3)
+    "primary":       "#007AFF",
+    "primary_hover": "#0A84FF",
+    "primary_press": "#0062CC",
+    "primary_soft":  "#D6E8FF",
+    "primary_border": "#A9CEFB",
+    "primary_text":  "#004C99",
+    "accent":        "#06B6D4",
+    "accent_soft":   "#E0F7FB",
+    # Поверхности
+    "bg":            "#F5F5F7",
+    "surface":       "#FFFFFF",
+    "surface_alt":   "#FAFAFC",
+    "surface_sunken": "#F0F0F4",
+    "surface_high":  "#E9E9EE",
+    # Границы и разделители
+    "border":        "#D9D9DE",
+    "border_strong": "#A1A1A6",
+    "divider":       "#ECECF1",
+    # Текст
+    "text":          "#1D1D1F",
+    "text_muted":    "#86868B",
+    "text_faint":    "#A1A1A6",
+    "text_on_primary": "#FFFFFF",
+    # Состояния
+    "danger":        "#FF3B30",
+    "danger_hover":  "#FF453A",
+    "danger_soft":   "#FFEBEB",
+    "danger_text":   "#B3261E",
+    "success":       "#34C759",
+    "success_hover": "#30B350",
+    "success_soft":  "#F0FFF4",
+    "success_text":  "#1F9A3A",
+    "warning":       "#FF9500",
+    "warning_hover": "#F08A00",
+    "warning_soft":  "#FFF4E5",
+    "warning_text":  "#B26A00",
+    "neutral":       "#8E8E93",
+    "neutral_hover": "#7C7C81",
+    "disabled_bg":   "#E9E9EE",
+    "disabled_fg":   "#A1A1A6",
+    "seg_track":     "#E4E4EA",
+    "seg_thumb":     "#FFFFFF",
+    # «Ближайший формат» — отдельный (сиреневый) акцент
+    "nearest_soft":  "#F1ECFE",
+    "nearest_hover": "#E4DBFC",
+    "nearest_text":  "#5B45B8",
+    # Скругления
+    "r_xs": "6px",
+    "r_sm": "10px",
+    "r_md": "14px",
+    "r_lg": "20px",
+    "r_xl": "26px",
+    "r_pill": "999px",
+    # Типографика
+    "font": "'Segoe UI Variable Text', 'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif",
+    "font_display": "'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif",
+    "mono": "'Cascadia Mono', 'Consolas', 'Menlo', monospace",
+}
+
+
+def _normalize_font(raw):
+    raw = (raw or "").split(",")[0].strip().strip("'\"")
+    if not raw:
+        return "Arial"
+    for marker in ("Variable Display", "Variable Text", "Variable Small"):
+        if marker in raw:
+            raw = "Segoe UI"
+            break
+    return raw
+
 
 def force_light_palette(app):
     app.setStyle("Fusion")
+    app.setFont(QFont("Segoe UI", 10))
+    t = THEME
     pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,          QColor("#f5f6f7"))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor("#333333"))
-    pal.setColor(QPalette.ColorRole.Base,             QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.AlternateBase,    QColor("#f8f9fa"))
-    pal.setColor(QPalette.ColorRole.Text,             QColor("#333333"))
-    pal.setColor(QPalette.ColorRole.Button,           QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.ButtonText,       QColor("#333333"))
-    pal.setColor(QPalette.ColorRole.ToolTipBase,      QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.ToolTipText,      QColor("#333333"))
-    pal.setColor(QPalette.ColorRole.PlaceholderText,  QColor("#999999"))
-    pal.setColor(QPalette.ColorRole.Highlight,        QColor("#0066cc"))
-    pal.setColor(QPalette.ColorRole.HighlightedText,  QColor("#ffffff"))
-    pal.setColor(QPalette.ColorRole.BrightText,       QColor("#333333"))
-    pal.setColor(QPalette.ColorRole.Link,             QColor("#0066cc"))
-    pal.setColor(QPalette.ColorRole.LinkVisited,      QColor("#0052a3"))
+    pal.setColor(QPalette.ColorRole.Window,          QColor(t["bg"]))
+    pal.setColor(QPalette.ColorRole.WindowText,      QColor(t["text"]))
+    pal.setColor(QPalette.ColorRole.Base,             QColor(t["surface"]))
+    pal.setColor(QPalette.ColorRole.AlternateBase,    QColor(t["surface_alt"]))
+    pal.setColor(QPalette.ColorRole.Text,             QColor(t["text"]))
+    pal.setColor(QPalette.ColorRole.Button,           QColor(t["surface"]))
+    pal.setColor(QPalette.ColorRole.ButtonText,       QColor(t["text"]))
+    pal.setColor(QPalette.ColorRole.ToolTipBase,      QColor(t["surface"]))
+    pal.setColor(QPalette.ColorRole.ToolTipText,      QColor(t["text"]))
+    pal.setColor(QPalette.ColorRole.PlaceholderText,  QColor(t["text_muted"]))
+    pal.setColor(QPalette.ColorRole.Highlight,        QColor(t["primary"]))
+    pal.setColor(QPalette.ColorRole.HighlightedText,  QColor(t["text_on_primary"]))
+    pal.setColor(QPalette.ColorRole.BrightText,       QColor(t["text"]))
+    pal.setColor(QPalette.ColorRole.Link,             QColor(t["primary"]))
+    pal.setColor(QPalette.ColorRole.LinkVisited,      QColor(t["primary_press"]))
     pal.setColor(QPalette.ColorGroup.Disabled,
-                 QPalette.ColorRole.WindowText, QColor("#aaaaaa"))
+                 QPalette.ColorRole.WindowText, QColor(t["disabled_fg"]))
     pal.setColor(QPalette.ColorGroup.Disabled,
-                 QPalette.ColorRole.Text, QColor("#aaaaaa"))
+                 QPalette.ColorRole.Text, QColor(t["disabled_fg"]))
     pal.setColor(QPalette.ColorGroup.Disabled,
-                 QPalette.ColorRole.ButtonText, QColor("#aaaaaa"))
+                 QPalette.ColorRole.ButtonText, QColor(t["disabled_fg"]))
     app.setPalette(pal)
+
+
+def _qss_button(variant="filled", accent=None, accent_hover=None, radius=None):
+    """Кнопки как в web: сплошной цвет, скруглённые углы, мягкий transition-эффект."""
+    t = THEME
+    acc = accent or t["primary"]
+    hov = accent_hover or t["primary_hover"]
+    rad = radius or t["r_md"]
+    if variant == "filled":
+        return (
+            f"QPushButton{{background-color:{acc};color:{t['text_on_primary']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{hov};}}"
+            f"QPushButton:pressed{{background-color:{t['primary_press']};}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    if variant == "tonal":
+        return (
+            f"QPushButton{{background-color:{t['primary_soft']};color:{t['primary_text']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:#C7DEFB;}}"
+            f"QPushButton:pressed{{background-color:#B4D3F8;}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    if variant == "outlined":
+        return (
+            f"QPushButton{{background-color:transparent;color:{acc};"
+            f"border:1px solid {t['border']};border-radius:{rad};"
+            f"padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['primary_soft']};border-color:{acc};}}"
+            f"QPushButton:pressed{{background-color:#C7DEFB;}}"
+            f"QPushButton:disabled{{color:{t['disabled_fg']};border-color:{t['divider']};}}"
+        )
+    if variant == "text":
+        return (
+            f"QPushButton{{background-color:transparent;color:{acc};border:none;"
+            f"border-radius:{rad};padding:8px 16px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['surface_sunken']};}}"
+            f"QPushButton:pressed{{background-color:{t['surface_high']};}}"
+            f"QPushButton:disabled{{color:{t['disabled_fg']};}}"
+        )
+    if variant == "danger":
+        return (
+            f"QPushButton{{background-color:{t['danger']};color:{t['text_on_primary']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['danger_hover']};}}"
+            f"QPushButton:pressed{{background-color:#E03028;}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    if variant == "success":
+        return (
+            f"QPushButton{{background-color:{t['success']};color:{t['text_on_primary']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['success_hover']};}}"
+            f"QPushButton:pressed{{background-color:#2AA049;}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    if variant == "warning":
+        return (
+            f"QPushButton{{background-color:{t['warning']};color:{t['text_on_primary']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['warning_hover']};}}"
+            f"QPushButton:pressed{{background-color:#E08600;}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    if variant == "neutral":
+        return (
+            f"QPushButton{{background-color:{t['neutral']};color:{t['text_on_primary']};"
+            f"border:none;border-radius:{rad};padding:10px 22px;font-weight:600;font-size:13px;}}"
+            f"QPushButton:hover{{background-color:{t['neutral_hover']};}}"
+            f"QPushButton:pressed{{background-color:#6E6E73;}}"
+            f"QPushButton:disabled{{background-color:{t['disabled_bg']};color:{t['disabled_fg']};}}"
+        )
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -79,7 +229,7 @@ def resource_path(relative_path):
     if getattr(sys, 'frozen', False):
         base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
     else:
-        base_path = os.path.abspath(".")
+        base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
 
@@ -114,7 +264,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.3"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -221,15 +371,16 @@ def _read_registry_version():
 def get_app_version():
     """
     Версия для отображения и проверки обновлений:
-    1) version.txt рядом с exe (после установки Inno Setup)
-    2) APP_VERSION из собранного exe (при сборке PyInstaller)
-    3) реестр Windows — только запасной вариант
+    1) запуск из исходников — APP_VERSION (незакоммиченная сборка)
+    2) version.txt рядом с exe (после установки Inno Setup)
+    3) APP_VERSION из собранного exe (при сборке PyInstaller)
+    4) реестр Windows — только запасной вариант
     """
+    if not getattr(sys, "frozen", False):
+        return APP_VERSION
     ver = _read_version_file()
     if ver:
         return ver
-    if getattr(sys, "frozen", False):
-        return APP_VERSION
     reg = _read_registry_version()
     if reg:
         return reg
@@ -408,6 +559,7 @@ def check_for_update():
     """Ищет установщик (.exe) в последнем релизе.
     Сначала пробует /releases/latest, при ошибке — /releases?per_page=5."""
     current = get_app_version()
+    last_err = None
 
     # Попытка 1: /releases/latest
     try:
@@ -429,8 +581,6 @@ def check_for_update():
                     if _parse_version(tag) > _parse_version(current):
                         if best_tag is None or _parse_version(tag) > _parse_version(best_tag):
                             best_tag, best_url = tag, dl_url
-                    elif _parse_version(tag) == _parse_version(current):
-                        pass  # та же версия — пропускаем
                 else:
                     if tag and not dl_url:
                         best_err = f"В релизе {tag} нет .exe файла"
@@ -441,14 +591,14 @@ def check_for_update():
             if not best_tag:
                 return False, None, None, "Новых версий не найдено."
     except Exception as e:
-        err = getattr(last_err, "str", None) or f"list endpoint: {type(e).__name__}: {e}"
+        err = last_err or f"list endpoint: {type(e).__name__}: {e}"
         return False, None, None, err
 
     return False, None, None, last_err
 
 
 def download_update(url, target_path, progress_callback=None):
-    """Скачивает установщик .exe"""
+    """Скачивает установщик .exe. Возвращает (True,) или (False, причина)."""
     try:
         for old in [target_path, target_path + ".part"]:
             if os.path.exists(old):
@@ -459,7 +609,8 @@ def download_update(url, target_path, progress_callback=None):
         req = urllib.request.Request(url)
         req.add_header("User-Agent", "PDKopirka-Updater/1.0")
         req.add_header("Accept", "application/octet-stream")
-        with _urlopen_safe(req, timeout=300) as resp:
+        resp = _urlopen_safe(req, timeout=300)
+        with resp:
             total_size = int(resp.headers.get("Content-Length", 0))
             downloaded = 0
             chunk_size = 64 * 1024
@@ -481,13 +632,14 @@ def download_update(url, target_path, progress_callback=None):
                 os.remove(temp_path)
             except OSError:
                 pass
-            return False
+            return (False, f"Размер не совпадает: скачано {downloaded} из {total_size} байт")
+        size_mb = os.path.getsize(temp_path) / 1048576
         if os.path.getsize(temp_path) < 1024 * 100:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            return False
+            return (False, f"Файл слишком мал: {size_mb:.1f} МБ")
         # Проверка MZ-сигнатуры (.exe)
         with open(temp_path, "rb") as f:
             magic = f.read(2)
@@ -496,13 +648,13 @@ def download_update(url, target_path, progress_callback=None):
                 os.remove(temp_path)
             except OSError:
                 pass
-            return False
+            return (False, "Скачанный файл не является .exe (нет MZ-сигнатуры)")
         if os.path.exists(target_path):
             os.remove(target_path)
         os.rename(temp_path, target_path)
-        return True
-    except Exception:
-        return False
+        return (True,)
+    except Exception as e:
+        return (False, f"{type(e).__name__}: {e}")
 
 
 def apply_update_and_restart(installer_path, latest_version="new"):
@@ -583,24 +735,20 @@ class UpdateDialog(QDialog):
         lay.setSpacing(12)
         lay.setContentsMargins(25, 25, 25, 25)
         t = QLabel(f"🔄 Обновление до версии {self.latest_version}")
-        t.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        t.setStyleSheet("color: #0066cc; background: transparent;")
+        t.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        t.setStyleSheet(f"color: {THEME['primary']}; background: transparent;")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
-        self.progress.setStyleSheet(
-            "QProgressBar { border: 1px solid #ddd; border-radius: 4px; "
-            "background-color: white; color: #333; } "
-            "QProgressBar::chunk { background-color: #0066cc; }"
-        )
         lay.addWidget(self.progress)
         self.status_lbl = QLabel("Подготовка...")
         self.status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_lbl.setStyleSheet("color: #555; background: transparent;")
+        self.status_lbl.setStyleSheet(f"color: {THEME['text_muted']}; background: transparent;")
         lay.addWidget(self.status_lbl)
+        self.setStyleSheet(f"QDialog {{ background-color: {THEME['surface']}; color: {THEME['text']}; }}")
 
     def closeEvent(self, e):
         e.ignore()
@@ -631,13 +779,14 @@ class UpdateDialog(QDialog):
 
         self.status_lbl.setText("Скачивание обновления...")
         QApplication.processEvents()
-        ok = download_update(self.download_url, new_installer, on_progress)
-        if not ok:
+        dl_result = download_update(self.download_url, new_installer, on_progress)
+        if not dl_result[0]:
+            err_msg = dl_result[1] if len(dl_result) > 1 else "Неизвестная ошибка"
             self.accept()
             QMessageBox.critical(
                 None, "Ошибка обновления",
-                "Не удалось скачать обновление. Проверьте подключение к интернету "
-                "и повторите попытку позже.\n\n"
+                f"Не удалось скачать обновление: {err_msg}\n\n"
+                "Проверьте подключение к интернету и повторите попытку.\n\n"
                 "Вы также можете скачать установщик вручную:\n"
                 "https://github.com/fabilya/PDKopirka/releases/latest"
             )
@@ -653,121 +802,290 @@ class UpdateDialog(QDialog):
 # Диалог «Что нового»
 # ─────────────────────────────────────────────────────────────────────────────
 
+_CHANGELOG_HISTORY = [
+    {
+        "version": "2.3.3",
+        "date": "29.09.2026",
+        "sections": [
+            ("🎨 Новый дизайн", [
+                "Полностью обновлён интерфейс — современный стиль с синим акцентом, скруглениями и мягкими тенями",
+                "Вкладки переименованы: «Детализация», «Менеджер», «Клиент», «История», «Заливка»",
+                "На каждой вкладке добавлено краткое описание назначения",
+                "Переключатели «Цветность», «Брошюровка», «Фальцовка» выполнены как анимированные сегменты",
+                "«Учитывать заливку цветом» и «Резка» — тумблеры с синей подсветкой",
+                "Плавная анимация при переключении вкладок",
+            ]),
+            ("📂 Выбор файлов", [
+                "Кнопки «Папка» и «Файл» убраны — по клику на зону открывается проводник",
+                "Проводник стартует в папке «Загрузки» и имеет быстрый доступ к основным папкам",
+                "В проводнике есть редактируемая адресная строка — путь можно вписать вручную",
+                "Добавлен столбец «Дата изменения» с сортировкой от нового к старому по клику",
+                "Папки и PDF получили отдельные иконки",
+            ]),
+            ("🎨 Заливка и детализация", [
+                "Единая метрика заливки — покрытие тонером/чернилами (все не-белые пиксели), для цветных и ч/б страниц",
+                "Страницы с заливкой более 50% помечаются в детализации как «[заливка]»",
+                "Проценты во вкладке «Заливка» и в «Детализации» теперь совпадают",
+                "Анализ страницы выполняется одним рендером вместо трёх — анализ стал заметно быстрее",
+            ]),
+            ("⚙️ Параметры", [
+                "Количество экземпляров — поле с кнопками «−» и «+»",
+                "Подсказка внизу убрана, лишнее пустое пространство сокращено",
+                "Окно программы стало компактнее, вкладка «Менеджер» — без прокрутки",
+            ]),
+            ("🔄 Обновления", [
+                "При ошибке загрузки обновления показывается конкретная причина",
+                "Диалог обновления больше не блокирует окно программы",
+                "Исправлено отображение версии при запуске из исходников (показывалась установленная версия)",
+            ]),
+        ],
+    },
+]
+
+
+def _changelog_entry_html(entry, is_current=False):
+    marker = "🆕 " if is_current else ""
+    date = entry.get("date", "")
+    date_html = f' <span style="color:{THEME["text_faint"]};font-weight:normal;font-size:12px;">{date}</span>' if date else ""
+    title = f"Версия {entry['version']}" if is_current else f"История — версия {entry['version']}"
+    parts = [f'<h2 style="color:{THEME["primary"]}; margin-bottom:10px;">{marker}{title}{date_html}</h2>']
+    for section_title, items in entry.get("sections", []):
+        parts.append(
+            f'<h3 style="color:{THEME["primary"]}; border-bottom:1px solid {THEME["border"]}; '
+            f'padding-bottom:4px; margin-top:16px;">{section_title}</h3>'
+        )
+        parts.append("<ul>")
+        parts.extend(f"    <li>{item}</li>" for item in items)
+        parts.append("</ul>")
+    return "\n".join(parts)
+
+
 def _changelog_html(version):
-    return f"""
-<h2 style="color:#0066cc; margin-bottom:10px;">Версия {version}</h2>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🎨 Вкладка «Заливка страниц»
-</h3>
-<ul>
-    <li>Новая вкладка с деревом файлов и процентов заливки для каждой страницы</li>
-    <li>Для цветных страниц — процент цветной заливки, для ч/б — процент покрытия тонером</li>
-    <li>Кнопки «Развернуть все» / «Свернуть все», цветовая градация процента</li>
-    <li>Работает при включённой опции «Учитывать заливку цветом»</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🐛 Исправление определения цветности
-</h3>
-<ul>
-    <li>Исправлен алгоритм определения цветности — тёмные около-серые пиксели больше не влияют на результат</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📐 Нестандартные форматы
-</h3>
-<ul>
-    <li>Добавлен подсчёт фальцовок нестандартных форматов во вкладке менеджера (CRM) — точное количество сгибов для каждого листа</li>
-    <li>Чекбокс «Резка» в диалоге нестандартных форматов теперь по умолчанию выключен — пользователь сам решает</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🔄 Проверка обновлений
-</h3>
-<ul>
-    <li>Добавлена кнопка ручной проверки обновлений на вкладке «Параметры»</li>
-    <li>Улучшен механизм проверки — при ошибке /releases/latest выполняется fallback на список релизов</li>
-    <li>При ошибке загрузки обновления показывается сообщение (вместо аварийного завершения)</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📂 Выбор файлов и папок
-</h3>
-<ul>
-    <li>Добавлена зона перетаскивания (Drag & Drop) — можно перетащить папку или PDF файл прямо в окно программы</li>
-    <li>Кнопки «Папка» и «Файл» вынесены в отдельный блок справа от зоны DnD</li>
-    <li>Визуальная подсветка зоны при наведении файла (синяя пунктирная рамка)</li>
-    <li>После выбора зона становится зелёной и показывает путь</li>
-    <li>Путь отображается в одну строку, при необходимости можно выделить и скопировать мышкой</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📐 Определение форматов
-</h3>
-<ul>
-    <li>Погрешность определения формата увеличена с 5 до 10 мм — корректнее распознаются чертежи с нестандартными размерами</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    🎯 Обработка форматов A0×N
-</h3>
-<ul>
-    <li>Клик по ячейке A0×N в справочнике корректно обрабатывается как печать на рулоне 910 мм</li>
-    <li>В детализации: <code>A0x2 ч/б (1189×1682 мм) → 910×1287 — 2 стр. (1-2)</code></li>
-    <li>В блоке для менеджера (CRM): добавляется метраж в рулонную печать по большей стороне печатаемого формата</li>
-    <li>В отчёте для клиента: A0×N отображаются в общем списке расширенных форматов с указанием печатаемого размера и масштаба</li>
-    <li>Устранено дублирование A0×N в детализации (раньше выводились дважды — в общем блоке и в roll_groups)</li>
-</ul>
-
-<h3 style="color:#0066cc; border-bottom:1px solid #ddd; padding-bottom:4px; margin-top:16px;">
-    📄 Отчёт для клиента
-</h3>
-<ul>
-    <li>Объединены блоки расширенных форматов и A0×N в одну группу</li>
-    <li>«Итого страниц» перенесено в конец отчёта</li>
-</ul>
-"""
+    """Что нового для текущей версии + история предыдущих изменений."""
+    entries = list(_CHANGELOG_HISTORY)
+    current_ver = str(version).lstrip("v").strip()
+    known = {str(e["version"]) for e in entries}
+    if current_ver and current_ver not in known:
+        entries.insert(0, {"version": current_ver, "date": "", "sections": [
+            ("✨ Изменения", ["Список изменений для этой версии не заполнен."]),
+        ]})
+    parts = []
+    for idx, entry in enumerate(entries):
+        is_current = str(entry["version"]) == current_ver
+        if idx > 0:
+            parts.append(
+                f'<hr style="border:none;border-top:1px solid {THEME["divider"]};margin:20px 0 4px 0;">'
+            )
+        parts.append(_changelog_entry_html(entry, is_current))
+    return "\n".join(parts)
 
 
 class WhatsNewDialog(QDialog):
+    """Красивый попап «Что нового»: безрамочное окно со скруглёнными углами."""
+
+    RADIUS = 18
+
     def __init__(self, current_version, parent=None):
         super().__init__(parent)
         self.current_version = current_version
-        self.setWindowTitle("🎉 Что нового")
-        self.setMinimumSize(550, 450)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMinimumSize(620, 620)
         self.setModal(True)
         self._build_ui()
 
     def _build_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
-        lay.setContentsMargins(25, 25, 25, 25)
-        title = QLabel(f"🎉 Версия {self.current_version}")
-        title.setFont(QFont("Arial", 14, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #0066cc; background: transparent;")
-        lay.addWidget(title)
-        self.te = QTextEdit()
-        self.te.setReadOnly(True)
-        self.te.setFont(QFont("Arial", 10))
-        self.te.setStyleSheet(
-            "QTextEdit { background: white; color: #333; border: 1px solid #ddd; "
-            "border-radius: 6px; padding: 8px; }"
+        entry = self._current_entry()
+
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        card = QFrame(); card.setObjectName("WNCard")
+        card.setStyleSheet(
+            f"QFrame#WNCard{{background:{THEME['bg']};"
+            f"border:1px solid {THEME['divider']};border-radius:{self.RADIUS}px;}}"
         )
-        self.te.setHtml(_changelog_html(self.current_version))
-        lay.addWidget(self.te)
-        btn = QPushButton("👍 Закрыть")
-        btn.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        btn.setMinimumHeight(40)
-        btn.setStyleSheet(
-            "QPushButton { background-color: #0066cc; color: white; "
-            "border: none; border-radius: 6px; font-weight: bold; } "
-            "QPushButton:hover { background-color: #0052a3; }"
+        outer.addWidget(card)
+
+        root = QVBoxLayout(card); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+
+        # ── Шапка с градиентом ──
+        header = QFrame()
+        header.setStyleSheet(
+            f"QFrame{{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            f"stop:0 #0A84FF, stop:1 #00C2FF);border:none;"
+            f"border-top-left-radius:{self.RADIUS}px;border-top-right-radius:{self.RADIUS}px;}}"
         )
+        hl = QVBoxLayout(header); hl.setContentsMargins(26, 22, 26, 22); hl.setSpacing(4)
+        htitle = QLabel(f"Версия {self.current_version}")
+        htitle.setFont(QFont("Segoe UI Variable Display", 22, QFont.Weight.Bold))
+        htitle.setStyleSheet("color:#FFFFFF;background:transparent;")
+        hl.addWidget(htitle)
+        if entry.get("date"):
+            hdate = QLabel(entry["date"])
+            hdate.setStyleSheet("color:rgba(255,255,255,0.9);background:transparent;font-size:12px;")
+            hl.addWidget(hdate)
+        root.addWidget(header)
+
+        # ── Список карточек ──
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        body = QWidget(); bl = QVBoxLayout(body); bl.setContentsMargins(18, 16, 18, 16); bl.setSpacing(12)
+        for section_title, items in entry.get("sections", []):
+            bl.addWidget(self._section_card(section_title, items))
+        bl.addStretch()
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        # ── Кнопка ──
+        footer = QWidget(); fl = QVBoxLayout(footer); fl.setContentsMargins(18, 6, 18, 16)
+        btn = QPushButton("Отлично")
+        btn.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        btn.setMinimumHeight(44); btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(_qss_button("filled"))
         btn.clicked.connect(self.accept)
-        lay.addWidget(btn)
-        self.setStyleSheet("QDialog { background-color: #f5f6f7; color: #333; }")
+        fl.addWidget(btn)
+        root.addWidget(footer)
+
+    def _current_entry(self):
+        ver = str(self.current_version).lstrip("v").strip()
+        for e in _CHANGELOG_HISTORY:
+            if str(e["version"]) == ver:
+                return e
+        return {"version": ver, "date": "", "sections": [("Изменения", ["Список изменений пуст."])]}
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, "_drag_pos", None) is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def _section_card(self, title, items):
+        card = QFrame(); card.setObjectName("Card")
+        card.setStyleSheet(
+            f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+            f"border-radius:{THEME['r_lg']};}}"
+        )
+        cl = QVBoxLayout(card); cl.setContentsMargins(18, 14, 18, 14); cl.setSpacing(8)
+        tl = QLabel(title)
+        tl.setFont(QFont("Segoe UI Variable Display", 13, QFont.Weight.Bold))
+        tl.setStyleSheet(f"color:{THEME['text']};background:transparent;")
+        cl.addWidget(tl)
+        for item in items:
+            row = QHBoxLayout(); row.setSpacing(9)
+            dot = QLabel("•")
+            dot.setStyleSheet(f"color:{THEME['primary']};background:transparent;font-size:16px;font-weight:700;")
+            dot.setFixedWidth(12)
+            dot.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            row.addWidget(dot)
+            txt = QLabel(item)
+            txt.setWordWrap(True)
+            txt.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:13px;")
+            row.addWidget(txt, stretch=1)
+            cl.addLayout(row)
+        return card
+
+
+class DonateDialog(QDialog):
+    """Поддержка проекта: только QR-код для перевода через СБП."""
+
+    QR_PATH = "assets/donate_qr.png"
+    PHONE = "+7 901 360-06-42"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Поддержать проект")
+        self.setFixedSize(460, 700)
+        self.setModal(True)
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setStyleSheet(f"QDialog {{ background-color: {THEME['bg']}; color: {THEME['text']}; }}")
+        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+
+        header = QFrame()
+        header.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #34C759, stop:1 #00C2FF);border:none;}"
+        )
+        hl = QVBoxLayout(header); hl.setContentsMargins(24, 20, 24, 20); hl.setSpacing(2)
+        t = QLabel("❤️  Поддержать проект")
+        t.setFont(QFont("Segoe UI Variable Display", 19, QFont.Weight.Bold))
+        t.setStyleSheet("color:#FFFFFF;background:transparent;")
+        hl.addWidget(t)
+        s = QLabel("Ваш вклад идёт на развитие PDKopirka: новые функции и улучшения")
+        s.setStyleSheet("color:rgba(255,255,255,0.9);background:transparent;font-size:12px;")
+        s.setWordWrap(True)
+        hl.addWidget(s)
+        root.addWidget(header)
+
+        body = QWidget(); lay = QVBoxLayout(body); lay.setContentsMargins(22, 18, 22, 20); lay.setSpacing(12)
+
+        # Главный акцент: сканировать QR именно в приложении банка
+        callout = QFrame()
+        callout.setStyleSheet(
+            f"QFrame{{background:{THEME['warning_soft']};border:none;"
+            f"border-radius:{THEME['r_md']};}}"
+        )
+        cl = QHBoxLayout(callout); cl.setContentsMargins(14, 12, 14, 12); cl.setSpacing(10)
+        icon = QLabel("📱")
+        icon.setStyleSheet("background:transparent;font-size:24px;")
+        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        cl.addWidget(icon, alignment=Qt.AlignmentFlag.AlignTop)
+        ctext = QLabel(
+            "<b>Важно: отсканируйте QR камерой в приложении банка</b><br>"
+            "<span>Откройте приложение банка на телефоне → «Оплата по QR» и наведите камеру.</span>"
+        )
+        ctext.setTextFormat(Qt.TextFormat.RichText)
+        ctext.setWordWrap(True)
+        ctext.setStyleSheet(f"color:{THEME['warning_text']};background:transparent;font-size:12px;")
+        cl.addWidget(ctext, stretch=1)
+        lay.addWidget(callout)
+
+        qr_frame = QFrame(); qr_frame.setObjectName("Card")
+        qr_frame.setStyleSheet(
+            f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+            f"border-radius:{THEME['r_lg']};}}"
+        )
+        qfl = QVBoxLayout(qr_frame); qfl.setContentsMargins(16, 16, 16, 16); qfl.setSpacing(8)
+        self.qr_label = QLabel()
+        self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = QPixmap(resource_path(self.QR_PATH))
+        if not pix.isNull():
+            self.qr_label.setPixmap(pix.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            self.qr_label.setText("QR-код не найден")
+            self.qr_label.setStyleSheet(f"color:{THEME['danger']};background:transparent;")
+        qfl.addWidget(self.qr_label)
+        qr_frame.setMaximumWidth(360)
+        lay.addWidget(qr_frame, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        phone_lbl = QLabel(f"Получатель: <b style='color:{THEME['primary']};'>{self.PHONE}</b>")
+        phone_lbl.setTextFormat(Qt.TextFormat.RichText)
+        phone_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        phone_lbl.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:13px;")
+        lay.addWidget(phone_lbl)
+        lay.addStretch()
+        root.addWidget(body, stretch=1)
+
+        btn_close = QPushButton("Закрыть")
+        btn_close.setMinimumHeight(46); btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        btn_close.setStyleSheet(_qss_button("filled"))
+        btn_close.clicked.connect(self.accept)
+        footer = QWidget(); fl = QVBoxLayout(footer); fl.setContentsMargins(22, 0, 22, 18)
+        fl.addWidget(btn_close)
+        root.addWidget(footer)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -889,11 +1207,34 @@ ROLL_WEIGHT_G_PER_MM = 80.0 / 1000.0
 BINDING_WEIGHT_G = {"A4": 60.0, "A3": 90.0}
 FMT_ORDER = ["A4", "A3", "A2", "A1", "A0"]
 KIND_ORDER = ["ч/б", "цвет"]
+FILL_MIN_RATIO = 0.50
+PAGE_ANALYSIS_DPI = 200
 
 CUTTING_FORMATS = {
     "A4x3", "A4x5", "A4x6", "A4x7", "A4x8", "A4x9",
     "A3x3", "A3x4", "A3x5", "A3x6", "A3x7", "A3x8", "A3x9",
 }
+
+# Ширина рулонов, мм
+ROLL_WIDTHS_MM = (610, 841)
+# Допуск: сторона в пределах ROLL_CUT_TOLERANCE_MM от ширины рулона — резка не нужна
+ROLL_CUT_TOLERANCE_MM = 40
+
+
+def page_needs_cutting(w, h, tol=ROLL_CUT_TOLERANCE_MM):
+    """Нужна ли резка для страницы w×h при печати на рулонах 610/841.
+
+    Резка НЕ нужна, если хотя бы одна сторона близко подходит к ширине рулона,
+    т.е. лежит в диапазоне [roll - tol; roll] для 610 или 841 мм.
+    Иначе остаётся белый участок, который нужно срезать.
+    """
+    sides = (float(w), float(h))
+    for roll in ROLL_WIDTHS_MM:
+        lo = roll - tol
+        for s in sides:
+            if lo <= s <= roll:
+                return False
+    return True
 
 def _norm_format_key(s):
     return str(s).upper().replace("А", "A").replace("Х", "X").replace(" ", "")
@@ -1038,6 +1379,107 @@ class NoScrollSpinBox(QSpinBox):
         event.ignore()
 
 
+class CopiesInput(QWidget):
+    """Числовое поле с видимыми кнопками − / +, в стиле дизайна.
+
+    API совпадает с QSpinBox для используемых методов (value, setValue,
+    valueChanged, setMinimum/Maximum, blockSignals, setKeyboardTracking).
+    """
+
+    valueChanged = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        self.spin = NoScrollSpinBox()
+        self.spin.setMinimum(1); self.spin.setMaximum(100); self.spin.setValue(1)
+        self.spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.spin.setKeyboardTracking(True)
+        self.spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.spin.setFixedHeight(40)
+        self.spin.setStyleSheet(
+            f"QSpinBox{{background-color:{THEME['surface_sunken']};color:{THEME['text']};"
+            f"border:1px solid transparent;border-radius:{THEME['r_md']};"
+            f"padding:0 8px;font-size:15px;font-weight:700;min-width:44px;}}"
+            f"QSpinBox:focus{{border:1px solid {THEME['primary']};background-color:{THEME['surface']};}}"
+        )
+
+        self.btn_minus = QPushButton("−")
+        self.btn_plus = QPushButton("+")
+        for b in (self.btn_minus, self.btn_plus):
+            b.setFixedSize(40, 40)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            # Кнопки не берут клавиатурный фокус: иначе при достижении границы
+            # (кнопка блокируется) фокус «уезжает» в поле и значение можно
+            # случайно изменить стрелками или колесом.
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setFont(QFont("Segoe UI Variable Display", 15, QFont.Weight.Bold))
+            b.setStyleSheet(
+                f"QPushButton{{background-color:{THEME['primary_soft']};color:{THEME['primary_text']};"
+                f"border:none;border-radius:{THEME['r_md']};padding:0;}}"
+                f"QPushButton:hover{{background-color:#C7DEFB;}}"
+                f"QPushButton:pressed{{background-color:#B4D3F8;}}"
+                f"QPushButton:disabled{{background-color:{THEME['disabled_bg']};color:{THEME['disabled_fg']};}}"
+            )
+        self.btn_minus.clicked.connect(lambda: self._step(-1))
+        self.btn_plus.clicked.connect(lambda: self._step(1))
+
+        row.addWidget(self.btn_minus)
+        row.addWidget(self.spin, stretch=0)
+        row.addWidget(self.btn_plus)
+        row.addStretch()
+
+        self.spin.valueChanged.connect(self._sync)
+        self.spin.valueChanged.connect(self.valueChanged.emit)
+        self._sync(self.spin.value())
+
+    def _step(self, delta):
+        self.spin.setValue(self.spin.value() + delta)
+
+    def _sync(self, _v=None):
+        self.btn_minus.setEnabled(self.spin.value() > self.spin.minimum())
+        self.btn_plus.setEnabled(self.spin.value() < self.spin.maximum())
+
+    # ── проксирование API QSpinBox ──
+    def value(self):
+        return self.spin.value()
+
+    def setValue(self, v):
+        self.spin.setValue(v)
+        self._sync()
+
+    def setMinimum(self, v):
+        self.spin.setMinimum(v); self._sync()
+
+    def setMaximum(self, v):
+        self.spin.setMaximum(v); self._sync()
+
+    def minimum(self):
+        return self.spin.minimum()
+
+    def maximum(self):
+        return self.spin.maximum()
+
+    def blockSignals(self, b):
+        return self.spin.blockSignals(b)
+
+    def setKeyboardTracking(self, v):
+        self.spin.setKeyboardTracking(v)
+
+    def setButtonSymbols(self, v):
+        pass
+
+    def setFixedWidth(self, w):
+        super().setFixedWidth(w)
+
+    def wheelEvent(self, event):
+        event.ignore()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def compact_page_list(pages):
     if not pages:
         return ""
@@ -1057,35 +1499,159 @@ def compact_page_list(pages):
 # Выдвижная панель подсказки форматов
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _format_base_colors(base):
+    """Мягкие (неяркие) цвета по базовому формату: A4 — голубой, A3 — зелёный,
+    A2 — жёлтый, A1 — оранжевый, A0 — красный."""
+    palette = {
+        "A4": ("#E1F0FE", "#CBE4FC"),   # голубой
+        "A3": ("#E2F6E8", "#CDEFD8"),   # зелёный
+        "A2": ("#FBF3DA", "#F6E9BF"),   # жёлтый
+        "A1": ("#FDEBD6", "#F9DCBC"),   # оранжевый
+        "A0": ("#FCE3E3", "#F8D2D2"),   # красный
+    }
+    return palette.get(base, ("#F0F0F4", "#E4E4EA"))
+
+
 def _format_hint_style(name):
     if name in UNPRINTABLE_FORMATS:
-        return "#888888", "Не печатаем"
+        return THEME["text_faint"], "Не печатаем"
     if name in PRINTABLE_A0_SIZE_NAMES.values():
-        return "#2e7d32", "Ближайший формат"
+        return THEME["success"], "Ближайший формат"
     if name in CUTTING_FORMATS:
-        return "#1565c0", "С учетом резки"
-    return "#2e7d32", "Без резки"
+        return THEME["primary"], "С учетом резки"
+    return THEME["success"], "Без резки"
+
+
+def _format_chip_palette(name):
+    """(фон, фон_при_наведении, цвет_текста) — тональные чипы M3.
+
+    Резка/без резки цветом не выделяются (менеджеру это не нужно — решение
+    всё равно принимается в логике). Особые цвета только у «не печатаем»
+    и «ближайший формат».
+    """
+    if name in UNPRINTABLE_FORMATS:
+        return THEME["surface_sunken"], THEME["disabled_bg"], THEME["text_faint"]
+    if name in PRINTABLE_A0_SIZE_NAMES.values():
+        return THEME["nearest_soft"], THEME["nearest_hover"], THEME["nearest_text"]
+    return THEME["surface"], THEME["primary_soft"], THEME["text"]
 
 
 def _format_legend_html():
     return (
-        '<span style="color:#2e7d32;font-size:12px;">●</span> Без резки &nbsp;&nbsp; '
-        '<span style="color:#1565c0;font-size:12px;">●</span> С учетом резки &nbsp;&nbsp; '
-        '<span style="color:#ff0000;font-size:12px;">●</span> Не печатаем &nbsp;&nbsp; '
-        '<span style="color:#2e7d32;font-size:12px;">●</span> Ближайший формат'
+        f'<span style="color:{THEME["text_muted"]};font-size:13px;">●</span> Печатаем &nbsp;&nbsp; '
+        f'<span style="color:{THEME["nearest_text"]};font-size:13px;">●</span> Ближайший формат &nbsp;&nbsp; '
+        f'<span style="color:{THEME["text_faint"]};font-size:13px;">●</span> Не печатаем'
     )
 
 
-# Столбцы справочника (блоки 1–4)
-_FORMAT_COL_A4 = ["A4"] + [f"A4x{i}" for i in range(3, 10)]
-_FORMAT_COL_A3 = ["A3"] + [f"A3x{i}" for i in range(3, 10)]
-_FORMAT_COL_A2 = ["A2"] + [f"A2x{i}" for i in range(3, 10)]
-_FORMAT_COL_A1 = ["A1"] + [f"A1x{i}" for i in range(3, 10)]
+# Сетка справочника: столбцы — базовые форматы, строки — множители (×1…×9).
+_FORMAT_COLS = ["A4", "A3", "A2", "A1", "A0"]
+_FORMAT_MULTS = [1] + list(range(2, 10))
+_FORMAT_ROWS = ["A4", "A3", "A2", "A1"]
 _A0_OVERSIZE_ORDER = [f"A0x{i}" for i in range(2, 10)]
 
 
+class HelpIconButton(QToolButton):
+    """Круглая иконка «?»; по нажатию показывает/скрывает облачко с подсказкой."""
+
+    def __init__(self, html, parent=None):
+        super().__init__(parent)
+        self._html = html
+        self._popup = None
+        self.setText("?")
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(
+            f"QToolButton{{background:{THEME['primary']};color:#FFFFFF;border:none;"
+            f"border-radius:13px;font-weight:800;font-size:14px;}}"
+            f"QToolButton:hover{{background:{THEME['primary_hover']};}}"
+        )
+        self.clicked.connect(self.toggle_popup)
+
+    def toggle_popup(self):
+        if self._popup is not None and self._popup.isVisible():
+            self._close_popup()
+            return
+        self._show_popup()
+
+    def _show_popup(self):
+        self._popup = QFrame(self.window())
+        self._popup.setObjectName("HelpBubble")
+        self._popup.setStyleSheet(
+            f"QFrame#HelpBubble{{background:{THEME['surface']};"
+            f"border:1px solid {THEME['warning']};border-radius:{THEME['r_md']};}}"
+            f"QFrame#HelpBubble QLabel{{color:{THEME['text']};font-size:12px;background:transparent;}}"
+        )
+        lay = QVBoxLayout(self._popup)
+        lay.setContentsMargins(14, 12, 14, 12)
+        body = QLabel(self._html)
+        body.setTextFormat(Qt.TextFormat.RichText)
+        body.setWordWrap(True)
+        body.setStyleSheet(f"color:{THEME['text']};background:transparent;font-size:12px;")
+        lay.addWidget(body)
+        self._popup.adjustSize()
+        w = min(440, self._popup.sizeHint().width())
+        self._popup.setFixedWidth(w)
+        self._popup.adjustSize()
+
+        # Позиционируем облачко рядом с иконкой «?»
+        btn_tl = self.mapTo(self.window(), self.rect().topRight())
+        x = btn_tl.x() + 8
+        y = btn_tl.y() + self.height() + 6
+        # Не вылезать за пределы окна
+        win = self.window().rect()
+        if x + self._popup.width() > win.width() - 10:
+            x = win.width() - self._popup.width() - 10
+        if y + self._popup.height() > win.height() - 10:
+            y = btn_tl.y() - self._popup.height() - 6
+        self._popup.move(max(10, x), max(10, y))
+        self._popup.show()
+        self._popup.raise_()
+
+    def _close_popup(self):
+        if self._popup is not None:
+            self._popup.hide()
+            self._popup.deleteLater()
+            self._popup = None
+
+
+class FormatGridCell(QPushButton):
+    """Ячейка сетки форматов: сообщает о наведении для подсветки строки/столбца."""
+
+    hovered = pyqtSignal(int, int)
+    left = pyqtSignal()
+
+    def __init__(self, row, col, base, text, on_click, parent=None):
+        super().__init__(text, parent)
+        self._row = row
+        self._col = col
+        self._base = base
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        self.setMinimumHeight(44)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setFlat(True)
+        self.setToolTip("")
+
+    def enterEvent(self, event):
+        self.hovered.emit(self._row, self._col)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.left.emit()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._on_click:
+            self._on_click()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class A0NearestFormatRow(QFrame):
-    """Строка A0×N: номинал (серый) → печатаемый размер (зелёный), клик — ближайший формат."""
+    """Строка A0×N: «ближайший формат» отдельным (сиреневым) цветом."""
 
     def __init__(self, key, on_format_click, parent=None):
         super().__init__(parent)
@@ -1093,206 +1659,302 @@ class A0NearestFormatRow(QFrame):
         self._on_format_click = on_format_click
         ow, oh = A0_OVERSIZE_MM[key]
         pw, ph = A0_PRINTABLE_MM[key]
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
-            "A0NearestFormatRow { background: white; border: 1px solid #ccc; border-radius: 4px; }"
-            "A0NearestFormatRow:hover { background: #e8f4ff; border-color: #2e7d32; }"
+            f"A0NearestFormatRow {{ background: {THEME['nearest_soft']}; "
+            f"border: none; border-radius: {THEME['r_sm']}; }}"
+            f"A0NearestFormatRow:hover {{ background: {THEME['nearest_hover']}; }}"
         )
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(2)
-        title = QLabel(key)
-        title.setFont(QFont("Arial", 8, QFont.Weight.Bold))
-        title.setStyleSheet("color: #333; background: transparent; border: none;")
-        line = QLabel(
-            f'<span style="color:#c62828;">{ow}×{oh}</span>'
-            f' → <span style="color:#2e7d32;">{pw}×{ph}</span>'
-        )
-        line.setTextFormat(Qt.TextFormat.RichText)
-        line.setFont(QFont("Arial", 8))
-        line.setStyleSheet("background: transparent; border: none;")
+        lay.setContentsMargins(6, 3, 6, 3)
+        lay.setSpacing(0)
+        title = QLabel(f"{key} → {pw}×{ph}")
+        title.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(f"color: {THEME['nearest_text']}; background: transparent; border: none;")
+        line = QLabel(f"{ow}×{oh}")
+        line.setFont(QFont("Segoe UI", 7))
+        line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        line.setStyleSheet(f"color: {THEME['nearest_text']}; background: transparent; border: none;")
         lay.addWidget(title)
         lay.addWidget(line)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._on_format_click:
+            self._on_format_click(self._fmt_name)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
 
 class FormatHintPanel(QFrame):
-    """Справочник форматов (5 блоков); клик вызывает on_format_click(name)."""
+    """Справочник форматов: столбцы — A4/A3/A2/A1/A0, строки — множители ×1…×9.
 
-    # Высота одной строки в колонке (одинаковая для всех типов ячеек)
-    _ROW_HEIGHT = 38
-    # Количество строк в колонке (1 базовый + 7 расширенных)
-    _ROWS_COUNT = 8
+    При наведении на ячейку подсвечиваются её строка и столбец — менеджер
+    видит, что именно выбирает.
+    """
 
     def __init__(self, parent=None, on_format_click=None):
         super().__init__(parent)
         self._on_format_click = on_format_click
-        self._panel_width = 540
         self.setStyleSheet(
-            "FormatHintPanel { background-color: #f9f9f9; "
-            "border: 2px solid #0066cc; border-radius: 8px; color: #333; }"
+            f"FormatHintPanel {{ background-color: {THEME['surface']}; "
+            f"border: 1px solid {THEME['divider']}; border-radius: {THEME['r_xl']}; color: {THEME['text']}; }}"
         )
-        self.setFixedWidth(self._panel_width)
+        self._cells = {}          # (row,col) -> FormatGridCell
+        self._cell_keys = {}      # (row,col) -> name (для палитры)
+        self._row_headers = {}    # row -> QLabel
+        self._col_headers = {}    # col -> QLabel
+        self.setMinimumWidth(680)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         cl = QVBoxLayout(self)
-        cl.setContentsMargins(8, 8, 8, 8)
-        cl.setSpacing(6)
+        cl.setContentsMargins(12, 12, 12, 12)
+        cl.setSpacing(8)
 
-        title = QLabel("📐 Выберите ближайший формат")
-        title.setFont(QFont("Arial", 10, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("color: #0066cc; background: transparent; border: none;")
-        cl.addWidget(title)
+        head = QHBoxLayout(); head.setSpacing(6)
+        title = QLabel("📐 Ближайший формат")
+        title.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.Bold))
+        title.setStyleSheet(f"color: {THEME['text']}; background: transparent; border: none;")
+        head.addWidget(title); head.addStretch()
+        cl.addLayout(head)
 
-        legend = QLabel(_format_legend_html())
-        legend.setTextFormat(Qt.TextFormat.RichText)
-        legend.setFont(QFont("Arial", 8))
-        legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        legend.setStyleSheet("color: #333; background: transparent; border: none;")
-        legend.setWordWrap(True)
-        cl.addWidget(legend)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        grid.setContentsMargins(0, 0, 0, 0)
 
-        inner = QFrame()
-        inner.setStyleSheet(
-            "QFrame { background: white; border: 1px solid #ddd; "
-            "border-radius: 4px; }"
+        # Заголовки столбцов — базовые форматы (яркие)
+        for col, base in enumerate(_FORMAT_COLS, start=1):
+            cap = QLabel(base)
+            cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cap.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.Bold))
+            cap.setMinimumHeight(32)
+            cap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self._col_headers[col] = cap
+            grid.addWidget(cap, 0, col)
+
+        # Строки — множители
+        for row, mult in enumerate(_FORMAT_MULTS, start=1):
+            row_lbl = QLabel("×1" if mult == 1 else f"×{mult}")
+            row_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row_lbl.setFont(QFont("Segoe UI Variable Display", 11, QFont.Weight.Bold))
+            row_lbl.setMinimumHeight(44)
+            row_lbl.setFixedWidth(46)
+            self._row_headers[row] = row_lbl
+            grid.addWidget(row_lbl, row, 0)
+
+            for col, base in enumerate(_FORMAT_COLS, start=1):
+                cell = self._make_cell(row, col, base, mult)
+                if cell is None:
+                    cell = self._make_placeholder(row, col)
+                grid.addWidget(cell, row, col)
+            grid.setRowStretch(row, 1)
+
+        cl.addLayout(grid, stretch=1)
+        self._apply_headers_base()
+
+    def _make_placeholder(self, row, col):
+        """Серая плашка на месте отсутствующего формата (например, ×2 у A4)."""
+        lbl = QLabel("—")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setMinimumHeight(44)
+        lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        lbl.setStyleSheet(
+            f"color:{THEME['text_faint']};background:{THEME['surface_sunken']};"
+            f"border:none;border-radius:{THEME['r_sm']};"
         )
-        root = QHBoxLayout(inner)
-        root.setSpacing(4)
-        root.setContentsMargins(4, 4, 4, 4)
+        return lbl
 
-        root.addWidget(self._make_column_block(_FORMAT_COL_A4), stretch=1)
-        root.addWidget(self._make_column_block(_FORMAT_COL_A3), stretch=1)
-        root.addWidget(self._make_column_block(_FORMAT_COL_A2), stretch=1)
-        root.addWidget(self._make_column_block(_FORMAT_COL_A1), stretch=1)
-        root.addWidget(self._make_a0_column(), stretch=1)
+    def _cell_name(self, base, mult):
+        """Имя формата для ячейки (без A0-ближайших) или None."""
+        if mult == 1:
+            return base if base in ISO_A else None
+        key = f"{base}x{mult}"
+        if base == "A0":
+            return key if key in A0_OVERSIZE_MM else None
+        return key if key in ISO_A_NONSTANDARD else None
 
-        cl.addWidget(inner, stretch=1)
+    def _make_cell(self, row, col, base, mult):
+        name = self._cell_name(base, mult)
+        if name is None:
+            return None
 
-    def _btn_style(self, color, enabled=True):
+        if base == "A0" and mult > 1:
+            # A0×N — на кнопке номинальный размер; уменьшение покажем в диалоге.
+            ow, oh = A0_OVERSIZE_MM[name]
+            cell = FormatGridCell(
+                row, col, base, f"{ow}×{oh}",
+                lambda n=name: self._click_a0(n),
+            )
+        else:
+            w, h = format_dimensions_mm(name)
+            cell = FormatGridCell(
+                row, col, base, f"{w}×{h}",
+                lambda n=name: self._click_format(n),
+            )
+
+        cell.hovered.connect(self._on_hover)
+        cell.left.connect(self._on_unhover)
+        self._cells[(row, col)] = cell
+        self._cell_keys[(row, col)] = name
+        cell.setStyleSheet(self._cell_style(name, "base"))
+        return cell
+
+    def _click_format(self, name):
+        if self._on_format_click:
+            self._on_format_click(name)
+
+    def _click_a0(self, key):
+        if self._on_format_click:
+            self._on_format_click(PRINTABLE_A0_SIZE_NAMES[A0_PRINTABLE_MM[key]])
+
+    # ── подсветка строки и столбца при наведении ──
+    def _cell_style(self, name, state):
+        # Цвет по базовому формату (A4 голубой … A0 красный), без рамок.
+        base = name[0:2]
+        bg, bg_h = _format_base_colors(base)
+        if state == "active":
+            return (f"QPushButton{{background:{THEME['primary']};color:{THEME['text_on_primary']};"
+                    f"border:none;border-radius:{THEME['r_sm']};font-weight:700;}}")
+        return (f"QPushButton{{background:{bg};color:{THEME['text']};"
+                f"border:none;border-radius:{THEME['r_sm']};font-weight:600;}}"
+                f"QPushButton:hover{{background:{bg_h};}}")
+
+    def _header_style(self, base, active):
+        if active:
+            return (f"color:{THEME['text_on_primary']};background:{THEME['primary']};"
+                    f"border:none;border-radius:{THEME['r_sm']};font-weight:700;")
+        if base is None:
+            return (f"color:{THEME['text']};background:{THEME['surface_sunken']};"
+                    f"border:none;border-radius:{THEME['r_sm']};font-weight:700;")
+        bg, _ = _format_base_colors(base)
+        return (f"color:{THEME['text']};background:{bg};"
+                f"border:none;border-radius:{THEME['r_sm']};font-weight:700;")
+
+    def _apply_headers_base(self):
+        for col, lbl in self._col_headers.items():
+            lbl.setStyleSheet(self._header_style(_FORMAT_COLS[col - 1], False))
+        for lbl in self._row_headers.values():
+            lbl.setStyleSheet(self._header_style(None, False))
+
+    def _on_hover(self, row, col):
+        """Прямой угол: активная ячейка + её строка слева + столбец сверху."""
+        for (r, c), cell in self._cells.items():
+            state = "active" if (r, c) == (row, col) else "base"
+            cell.setStyleSheet(self._cell_style(self._cell_keys[(r, c)], state))
+        for r, lbl in self._row_headers.items():
+            lbl.setStyleSheet(self._header_style(None, r == row))
+        for c, lbl in self._col_headers.items():
+            lbl.setStyleSheet(self._header_style(_FORMAT_COLS[c - 1], c == col))
+
+    def _on_unhover(self):
+        for (r, c), cell in self._cells.items():
+            cell.setStyleSheet(self._cell_style(self._cell_keys[(r, c)], "base"))
+        self._apply_headers_base()
+
+    def _btn_style(self, name, enabled=True):
         if not enabled:
             return (
-                f"QPushButton {{ color: {color}; background: #fafafa; "
-                f"border: 1px solid #ddd; border-radius: 4px; "
-                f"padding: 2px 4px; text-align: center; }}"
+                f"QPushButton {{ color: {THEME['text_faint']}; background: {THEME['surface_sunken']}; "
+                f"border: none; border-radius: {THEME['r_sm']}; padding: 4px 6px; "
+                f"text-align: center; font-weight: 600; }}"
             )
+        bg, bg_h, fg = _format_chip_palette(name)
         return (
-            f"QPushButton {{ color: {color}; background: white; "
-            f"border: 1px solid #ccc; border-radius: 4px; "
-            f"padding: 2px 4px; text-align: center; }}"
-            f"QPushButton:hover {{ background: #e8f4ff; border-color: {color}; }}"
+            f"QPushButton {{ color: {fg}; background: {bg}; "
+            f"border: none; border-radius: {THEME['r_sm']}; padding: 4px 6px; "
+            f"text-align: center; font-weight: 600; }}"
+            f"QPushButton:hover {{ background: {bg_h}; }}"
+            f"QPushButton:pressed {{ background: {bg_h}; }}"
         )
 
-    def _make_format_button(self, name, label=None, color=None, tip=None,
-                             enabled=True, fmt_name=None):
-        fmt_name = fmt_name or name
-        if color is None:
-            color, tip = _format_hint_style(fmt_name)
-        btn = QPushButton(label or name)
-        btn.setFont(QFont("Arial", 7))
-        btn.setToolTip(tip or "")
-        btn.setFixedHeight(self._ROW_HEIGHT)
-        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setStyleSheet(self._btn_style(color, enabled))
-        if enabled and self._on_format_click:
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _c=False, n=fmt_name: self._on_format_click(n))
-        else:
-            btn.setEnabled(False)
-        return btn
 
-    def _make_filler(self):
-        """Невидимая ячейка той же высоты, чтобы выровнять колонки."""
-        filler = QWidget()
-        filler.setFixedHeight(self._ROW_HEIGHT)
-        filler.setStyleSheet("background: transparent; border: none;")
-        return filler
+# ─────────────────────────────────────────────────────────────────────────────
+# Диалог подтверждения уменьшения A0×N
+# ─────────────────────────────────────────────────────────────────────────────
 
-    def _make_column_block(self, format_names):
-        frame = QFrame()
-        frame.setStyleSheet(
-            "QFrame { background: #fafafa; border: 1px solid #ccc; "
-            "border-radius: 6px; }"
+class A0ScaleConfirmDialog(QDialog):
+    """Красивое подтверждение печати A0×N с уменьшением под рулон 910 мм."""
+
+    def __init__(self, key, ow, oh, pw, ph, scale, parent=None):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowTitle("Формат нельзя напечатать в масштабе 1:1")
+        self.setFixedWidth(540)
+        self.setStyleSheet(f"QDialog{{background:{THEME['bg']};color:{THEME['text']};}}")
+
+        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+
+        # Шапка с акцентом (синяя, как кнопки программы)
+        header = QFrame()
+        header.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            "stop:0 #007AFF, stop:1 #00C2FF);border:none;}"
         )
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(2)
-        for name in format_names:
-            wh = format_dimensions_mm(name)
-            if not wh:
-                continue
-            w, h = wh
-            lay.addWidget(self._make_format_button(name, f"{name}\n{w}×{h}"))
-        # Добавляем пустые ячейки, чтобы колонка имела ту же высоту,
-        # что и самая длинная (A0)
-        rows_added = len(format_names)
-        for _ in range(self._ROWS_COUNT - rows_added):
-            lay.addWidget(self._make_filler())
-        return frame
+        hl = QVBoxLayout(header); hl.setContentsMargins(24, 20, 24, 20); hl.setSpacing(6)
+        t = QLabel(f"⚠️  {key} — уменьшение масштаба")
+        t.setFont(QFont("Segoe UI Variable Display", 16, QFont.Weight.Bold))
+        t.setStyleSheet("color:#FFFFFF;background:transparent;")
+        t.setWordWrap(True)
+        hl.addWidget(t)
+        s = QLabel("Формат больше рулона, печать возможна только в уменьшенном виде")
+        s.setFont(QFont("Segoe UI Variable Display", 16, QFont.Weight.Bold))
+        s.setStyleSheet("color:#FFFFFF;background:transparent;")
+        s.setWordWrap(True)
+        hl.addWidget(s)
+        root.addWidget(header)
 
-    def _make_a0_column(self):
-        frame = QFrame()
-        frame.setStyleSheet(
-            "QFrame { background: #fafafa; border: 1px solid #ccc; "
-            "border-radius: 6px; }"
+        body = QWidget(); bl = QVBoxLayout(body); bl.setContentsMargins(24, 20, 24, 20); bl.setSpacing(14)
+
+        # Наглядно: исходный → печатаемый
+        card = QFrame(); card.setObjectName("Card")
+        card.setStyleSheet(
+            f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+            f"border-radius:{THEME['r_lg']};}}"
         )
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(2)
+        cl = QVBoxLayout(card); cl.setContentsMargins(20, 16, 20, 16); cl.setSpacing(10)
 
-        # A0 — стандартный
-        w0, h0 = ISO_A["A0"]
-        lay.addWidget(self._make_format_button("A0", f"A0\n{w0}×{h0}"))
+        def row(title, value, color, bold=False):
+            r = QHBoxLayout()
+            lbl = QLabel(title)
+            lbl.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:13px;font-weight:600;")
+            val = QLabel(value)
+            val.setFont(QFont("Segoe UI Variable Display", 14, QFont.Weight.Bold))
+            val.setStyleSheet(f"color:{color};background:transparent;")
+            r.addWidget(lbl); r.addStretch(); r.addWidget(val)
+            cl.addLayout(r)
 
-        # A0x2..A0x8 — не печатаем, показываем ближайший
-        for key in _A0_OVERSIZE_ORDER[:7]:  # без A0x9
-            lay.addWidget(self._make_a0_row(key))
+        row("Исходный размер", f"{ow}×{oh} мм", THEME["text"])
+        arrow = QLabel("⬇")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        arrow.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:16px;")
+        cl.addWidget(arrow)
+        row("В масштабе " + f"{scale:.1f}%", f"{pw}×{ph} мм", THEME["primary"])
+        bl.addWidget(card)
 
-        return frame
-
-    def _make_a0_row(self, key):
-        """Строка A0×N: название (зелёное) + (красный номинал) (зелёный печатаемый)."""
-        ow, oh = A0_OVERSIZE_MM[key]
-        pw, ph = A0_PRINTABLE_MM[key]
-        fmt_name = PRINTABLE_A0_SIZE_NAMES[A0_PRINTABLE_MM[key]]
-
-        frame = QFrame()
-        frame.setCursor(Qt.CursorShape.PointingHandCursor)
-        frame.setFixedHeight(self._ROW_HEIGHT)
-        frame.setStyleSheet(
-            "QFrame { background: white; border: 1px solid #ccc; "
-            "border-radius: 4px; }"
-            "QFrame:hover { background: #e8f4ff; border-color: #2e7d32; }"
+        warn = QLabel("❗ Обязательно предупредите клиента о том, что формат будет уменьшен.")
+        warn.setWordWrap(True)
+        warn.setStyleSheet(
+            f"color:{THEME['primary_text']};background:{THEME['primary_soft']};"
+            f"border:none;border-radius:{THEME['r_md']};padding:12px;font-size:12px;font-weight:600;"
         )
+        bl.addWidget(warn)
 
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(0)
+        btns = QHBoxLayout(); btns.setSpacing(10)
+        btn_no = QPushButton("Отмена"); btn_no.setMinimumHeight(46)
+        btn_no.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_no.setStyleSheet(_qss_button("neutral")); btn_no.clicked.connect(self.reject)
+        btns.addWidget(btn_no)
+        btn_yes = QPushButton("Да, продолжить"); btn_yes.setMinimumHeight(46)
+        btn_yes.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_yes.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        btn_yes.setStyleSheet(_qss_button("filled")); btn_yes.clicked.connect(self.accept)
+        btns.addWidget(btn_yes, stretch=1)
+        bl.addLayout(btns)
 
-        title = QLabel(key)
-        title.setFont(QFont("Arial", 7, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(
-            "color: #2e7d32; background: transparent; border: none;"
-        )
-
-        sizes = QLabel(
-            f'<span style="color:#c62828;font-weight:bold;">{ow}×{oh}</span>'
-            f'<span style="color:#555;"> </span>'
-            f'<span style="color:#2e7d32;font-weight:bold;">({pw}×{ph})</span>'
-        )
-        sizes.setTextFormat(Qt.TextFormat.RichText)
-        sizes.setFont(QFont("Arial", 7, QFont.Weight.Bold))
-        sizes.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sizes.setStyleSheet("background: transparent; border: none;")
-
-        lay.addWidget(title)
-        lay.addWidget(sizes)
-
-        def on_click(event):
-            if (event.button() == Qt.MouseButton.LeftButton
-                    and self._on_format_click):
-                self._on_format_click(fmt_name)
-
-        frame.mousePressEvent = on_click
-        return frame
+        root.addWidget(body)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1329,12 +1991,21 @@ class UnknownFormatDialog(QDialog):
         cs = "цвет" if self.color else "ч/б"
         rng = compact_page_list(self.pages)
         self.setWindowTitle("Нестандартный формат")
-        self.setMinimumWidth(540)
+        self.setFixedWidth(1270)
         self.setModal(True)
 
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        # Левая колонка — без прокрутки: высота окна подстраивается под содержимое.
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setFixedWidth(545)
+        left_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
 
         mw = QWidget()
         root = QVBoxLayout(mw)
@@ -1342,11 +2013,14 @@ class UnknownFormatDialog(QDialog):
         root.setContentsMargins(20, 20, 20, 20)
 
         # Информация о файле
-        ib = QGroupBox("Обнаружен неизвестный формат")
-        ib.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        ib = QGroupBox("⚠️  Обнаружен неизвестный формат")
+        ib.setFont(QFont("Segoe UI Variable Display", 11, QFont.Weight.Bold))
         ib.setStyleSheet(
-            "QGroupBox{color:#333;background-color:white;}"
-            "QGroupBox::title{color:#333;}"
+            f"QGroupBox{{color:{THEME['danger_text']};background-color:{THEME['surface']};"
+            f"border:1px solid {THEME['danger']};border-radius:{THEME['r_lg']};"
+            f"margin-top:14px;padding:16px 14px 12px 14px;}}"
+            f"QGroupBox::title{{color:{THEME['danger_text']};subcontrol-origin:margin;"
+            f"subcontrol-position:top left;left:14px;padding:0 6px;}}"
         )
         il = QVBoxLayout(ib)
         for t in [
@@ -1356,29 +2030,32 @@ class UnknownFormatDialog(QDialog):
             f"Страниц: <b>{len(self.pages)}</b>  ({rng})",
         ]:
             lb = QLabel(t)
-            lb.setFont(QFont("Arial", 10))
-            lb.setStyleSheet("color:#333;background:transparent;")
+            lb.setFont(QFont("Segoe UI", 9))
+            lb.setWordWrap(True)
+            lb.setStyleSheet(f"color:{THEME['text']};background:transparent;")
             il.addWidget(lb)
-        bo = QPushButton("👁️ Открыть эти страницы для просмотра")
-        bo.setFont(QFont("Arial", 10))
+        bo = QPushButton("👁️ Открыть страницы")
+        bo.setFont(QFont("Segoe UI Variable Display", 9, QFont.Weight.DemiBold))
+        bo.setFixedHeight(38)
+        bo.setCursor(Qt.CursorShape.PointingHandCursor)
         bo.setStyleSheet(
-            "QPushButton{background-color:#e67e22;color:white;padding:10px;}"
-            "QPushButton:hover{background-color:#d35400;}"
+            f"QPushButton{{background:{THEME['primary']};color:#FFFFFF;border:none;"
+            f"border-radius:{THEME['r_md']};padding:6px 12px;font-weight:600;}}"
+            f"QPushButton:hover{{background:{THEME['primary_hover']};}}"
         )
         bo.clicked.connect(self._open_pages)
         il.addWidget(bo)
         root.addWidget(ib)
 
-        # Подсказка о выборе формата
+        # Подсказка о выборе формата — на оранжевом фоне
         hint = QLabel(
-            "💡 <b>Выберите формат справа</b> в справочнике "
-            "(нажмите на нужную ячейку)"
+            "💡 <b>Выберите формат справа</b> (нажмите на подходящий формат)"
         )
         hint.setTextFormat(Qt.TextFormat.RichText)
-        hint.setFont(QFont("Arial", 10))
+        hint.setFont(QFont("Segoe UI Variable Display", 11, QFont.Weight.Bold))
         hint.setStyleSheet(
-            "color:#0066cc;background:#eaf3ff;border:1px solid #b3d4f5;"
-            "border-radius:4px;padding:10px;"
+            f"color:#7A3D00;background:rgba(255,149,0,110);border:none;"
+            f"border-radius:{THEME['r_md']};padding:12px;"
         )
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -1386,68 +2063,103 @@ class UnknownFormatDialog(QDialog):
         # Вариант — рулонная печать
         rb = QGroupBox("Рулонная печать")
         rb.setStyleSheet(
-            "QGroupBox{color:#333;background-color:white;}"
-            "QGroupBox::title{color:#333;}"
+            f"QGroupBox{{color:{THEME['text']};background-color:{THEME['surface']};}}"
+            f"QGroupBox::title{{color:{THEME['text']};}}"
         )
         rl = QVBoxLayout(rb)
         rl.setContentsMargins(10, 6, 10, 10)
         rl.setSpacing(6)
 
-        rr = QHBoxLayout()
-        lbl_len = QLabel("Длина на страницу (мм):")
-        lbl_len.setStyleSheet("color:#333;background:transparent;")
-        rr.addWidget(lbl_len)
+        # Поле длины оставлено скрытым, чтобы не менять логику рулонной печати.
         self.edit_roll = QLineEdit()
-        self.edit_roll.setPlaceholderText("Например: 594")
-        self.edit_roll.setFont(QFont("Arial", 10))
-        self.edit_roll.setStyleSheet(
-            "QLineEdit{color:#333;background:white;border:1px solid #ccc;"
-            "padding:4px 6px;}"
-        )
-        rr.addWidget(self.edit_roll)
-        br = QPushButton("Применить длину")
-        br.setFixedWidth(160)
-        br.clicked.connect(self._apply_roll)
-        rr.addWidget(br)
-        rl.addLayout(rr)
+        self.edit_roll.setVisible(False)
 
-        roll_row = QHBoxLayout()
+        roll_row = QHBoxLayout(); roll_row.setSpacing(6)
         ba = QPushButton(
-            f"По бо́льшей стороне  ({max(self.w, self.h):.0f} мм × "
-            f"{len(self.pages)} стр.)"
+            f"По бо́льшей стороне ({max(self.w, self.h):.0f} мм × {len(self.pages)} стр.)"
         )
-        ba.setFont(QFont("Arial", 10))
+        ba.setFont(QFont("Segoe UI Variable Display", 9, QFont.Weight.DemiBold))
+        ba.setFixedHeight(40)
+        ba.setStyleSheet(
+            f"QPushButton{{background:{THEME['primary']};color:#FFFFFF;border:none;"
+            f"border-radius:{THEME['r_md']};padding:6px 10px;font-weight:600;}}"
+            f"QPushButton:hover{{background:{THEME['primary_hover']};}}"
+        )
+        ba.setCursor(Qt.CursorShape.PointingHandCursor)
+        ba.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        ba.setMinimumWidth(0)
         ba.clicked.connect(self._apply_auto)
-        roll_row.addWidget(ba)
-        self.chk_cutting = QCheckBox("Резка")
-        self.chk_cutting.setChecked(False)
-        self.chk_cutting.setStyleSheet("color:#333;background:transparent;")
+        roll_row.addWidget(ba, stretch=1)
+        self.chk_cutting = SwitchCheckBox("Резка")
+        # Автоматически: резка нужна, если ни одна сторона не близка к рулону 610/841.
+        self.chk_cutting.setChecked(page_needs_cutting(self.w, self.h))
+        self.chk_cutting.setStyleSheet(f"color:{THEME['text']};background:transparent;")
         roll_row.addWidget(self.chk_cutting)
+        # Иконка-подсказка «?» рядом с резкой
+        help_btn = HelpIconButton(self._cutting_help_html())
+        roll_row.addWidget(help_btn)
         roll_row.addStretch()
         rl.addLayout(roll_row)
+
+        # Схема-пример под кнопкой «По большей стороне»
+        ex = QLabel()
+        ex.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ex_pix = QPixmap(resource_path("assets/cut_example.png"))
+        if not ex_pix.isNull():
+            ex.setPixmap(ex_pix.scaled(430, 250, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation))
+        ex.setStyleSheet(
+            f"background:{THEME['surface']};border:1px solid {THEME['border']};"
+            f"border-radius:{THEME['r_md']};padding:6px;"
+        )
+        rl.addWidget(ex)
         root.addWidget(rb)
 
         # Пропустить
-        bs = QPushButton("Пропустить (не учитывать эти страницы)")
-        bs.setStyleSheet(
-            "QPushButton{background-color:#888;color:white;}"
-            "QPushButton:hover{background-color:#666;}"
-        )
+        bs = QPushButton("Пропустить")
+        bs.setFixedHeight(40)
+        bs.setCursor(Qt.CursorShape.PointingHandCursor)
+        bs.setStyleSheet(_qss_button("neutral"))
+        bs.setToolTip("Не учитывать эти страницы")
         bs.clicked.connect(self._skip)
         root.addWidget(bs)
 
-        outer.addWidget(mw, stretch=1)
+        left_scroll.setWidget(mw)
+        outer.addWidget(left_scroll, stretch=0)
         self.hint_panel = FormatHintPanel(
             self, on_format_click=self._apply_format_by_name
         )
-        outer.addWidget(self.hint_panel, stretch=0)
+        outer.addWidget(self.hint_panel, stretch=1)
+
+    def _cutting_help_html(self):
+        return (
+            "💡 <b>Когда нужна резка</b><br><br>"
+            "Если ни одна из сторон не подходит близко для печати на рулонах "
+            "610 / 841 мм — остаётся белый участок, который нужно срезать."
+            "<br><br>"
+            "<b>Пример №1:</b> Чертёж 420×1680 мм — при печати на рулоне 610 мм "
+            "останется незапечатываемая область <b>190 мм</b>."
+            "<br><br>"
+            "<b>Пример №2:</b> Чертёж 750×3251 мм — при печати на рулоне 841 мм "
+            "останется незапечатываемая область <b>91 мм</b>."
+            "<br><br>"
+            "Для таких форматов обязательно включайте <b>«Резка»</b>."
+            "<br><br>"
+            "<b>Рекомендуется сначала пользоваться таблицей форматов</b> — там резка "
+            "уже учтена, если формат её требует."
+        )
 
     def showEvent(self, event):
         super().showEvent(event)
         parent = self.parent()
         if parent:
             pg = parent.frameGeometry()
-            self.adjustSize()
+            # Без прокрутки: высота окна = высоте содержимого левой колонки.
+            sc = self.findChild(QScrollArea)
+            need_h = 720
+            if sc is not None and sc.widget() is not None:
+                need_h = max(need_h, sc.widget().sizeHint().height())
+            self.setFixedHeight(min(need_h, 1040))
             x = pg.x() + max(0, (pg.width() - self.width()) // 2)
             y = pg.y() + max(0, (pg.height() - self.height()) // 2)
             self.move(x, y)
@@ -1508,6 +2220,27 @@ class UnknownFormatDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось открыть:\n{e}")
 
+    def _open_cut_example(self):
+        """Открывает схему примера резки в отдельном окне."""
+        path = resource_path("assets/cut_example.png")
+        if not os.path.exists(path):
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Пример: где нужна резка")
+        dlg.setStyleSheet(f"QDialog{{background:{THEME['bg']};}}")
+        lay = QVBoxLayout(dlg); lay.setContentsMargins(16, 16, 16, 16); lay.setSpacing(10)
+        pic = QLabel()
+        pix = QPixmap(path)
+        pic.setPixmap(pix.scaled(1000, 700, Qt.AspectRatioMode.KeepAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation))
+        pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(pic)
+        btn = QPushButton("Закрыть"); btn.setMinimumHeight(42)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(_qss_button("filled")); btn.clicked.connect(dlg.accept)
+        lay.addWidget(btn)
+        dlg.exec()
+
     def _apply_format_by_name(self, name):
         # Если кликнули по ячейке A0xN — находим исходный A0xN-формат
         a0_key = None
@@ -1516,6 +2249,12 @@ class UnknownFormatDialog(QDialog):
                 a0_key = key
                 break
         if a0_key:
+            ow, oh = A0_OVERSIZE_MM[a0_key]
+            pw, ph = A0_PRINTABLE_MM[a0_key]
+            scale = min(pw / ow, ph / oh) * 100
+            dlg = A0ScaleConfirmDialog(a0_key, ow, oh, pw, ph, scale, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
             self.result_action = "a0_oversize"
             self.result_value = a0_key
             self.accept()
@@ -1573,6 +2312,151 @@ class UnknownFormatDialog(QDialog):
         self.result_action="skip"; self.result_value=None; self.accept()
 
 
+class SwitchCheckBox(QCheckBox):
+    """Современный toggle-switch: скруглённый трек + белый «бегунок»."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(30)
+        # Свитч не должен держать клавиатурный фокус: иначе при disable()
+        # Qt переводит фокус на следующий виджет (например, на поле экземпляров).
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return hint.__class__(hint.width() + 8, max(hint.height(), 30))
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QPainterPath
+        from PyQt6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = 46, 26
+        y = (self.height() - h) // 2
+        track = QRectF(0, y, w, h)
+        path = QPainterPath()
+        path.addRoundedRect(track, h / 2, h / 2)
+
+        if not self.isEnabled():
+            track_color = QColor(THEME["disabled_bg"])
+        elif self.isChecked():
+            grad = QLinearGradient(0, y, w, y + h)
+            grad.setColorAt(0.0, QColor("#0A84FF"))
+            grad.setColorAt(1.0, QColor("#00C2FF"))
+            p.fillPath(path, grad)
+            track_color = None
+        else:
+            track_color = QColor(THEME["seg_track"])
+        if track_color is not None:
+            p.fillPath(path, track_color)
+
+        knob_d = h - 6
+        knob_x = (w - knob_d - 3) if self.isChecked() else 3
+        knob = QRectF(knob_x, y + 3, knob_d, knob_d)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(knob)
+
+        text_x = w + 10
+        p.setPen(QColor(THEME["disabled_fg"] if not self.isEnabled() else THEME["text"]))
+        p.setFont(self.font())
+        p.drawText(
+            QRectF(text_x, 0, self.width() - text_x, self.height()),
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            self.text(),
+        )
+        p.end()
+
+    def hitButton(self, pos):
+        return pos.x() < 56 and 0 <= pos.y() <= self.height()
+
+
+class SegmentedControl(QWidget):
+    """iOS-сегмент-контрол: трек + анимированный белый «бегунок», как .segmented."""
+
+    def __init__(self, options, parent=None):
+        super().__init__(parent)
+        self._options = list(options)
+        self._index = 0
+        self._thumb = 0.0
+        self.setFixedHeight(36)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Только мышь: при отключении сегмента фокус не должен «уезжать» на другие поля.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._anim = QPropertyAnimation(self, b"thumb", self)
+        self._anim.setDuration(200)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setMinimumWidth(max(90, 70 * len(self._options)))
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._on_change = None
+
+    def getThumb(self):
+        return self._thumb
+
+    def setThumb(self, value):
+        self._thumb = float(value)
+        self.update()
+
+    thumb = pyqtProperty(float, fget=getThumb, fset=setThumb)
+
+    def currentIndex(self):
+        return self._index
+
+    def setCurrentIndex(self, idx, animate=True):
+        if not (0 <= idx < len(self._options)) or idx == self._index:
+            if idx == self._index:
+                return
+            return
+        self._index = idx
+        if animate:
+            self._anim.stop()
+            self._anim.setStartValue(self._thumb)
+            self._anim.setEndValue(float(idx))
+            self._anim.start()
+        else:
+            self.setThumb(float(idx))
+        if self._on_change:
+            self._on_change(idx)
+
+    def mousePressEvent(self, event):
+        n = len(self._options)
+        if n <= 0:
+            return
+        seg_w = self.width() / n
+        self.setCurrentIndex(int(event.position().x() // seg_w))
+
+    def paintEvent(self, event):
+        from PyQt6.QtGui import QPainter, QPainterPath
+        from PyQt6.QtCore import QRectF
+        n = len(self._options)
+        if n == 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        track = QRectF(0, 0, w, h)
+        path = QPainterPath(); path.addRoundedRect(track, h / 2, h / 2)
+        p.fillPath(path, QColor(THEME["seg_track"]))
+
+        seg_w = w / n
+        thumb = QRectF(self._thumb * seg_w + 2, 2, seg_w - 4, h - 4)
+        tpath = QPainterPath(); tpath.addRoundedRect(thumb, (h - 4) / 2, (h - 4) / 2)
+        # Активный сегмент — сплошной primary в любом состоянии (как у «Брошюровки»).
+        p.fillPath(tpath, QColor(THEME["primary"]))
+
+        for i, text in enumerate(self._options):
+            rect = QRectF(i * seg_w, 0, seg_w, h)
+            active = (abs(self._thumb - i) < 0.5)
+            if active:
+                p.setPen(QColor(THEME["text_on_primary"]))
+            else:
+                p.setPen(QColor(THEME["text_muted"]))
+            f = self.font(); f.setBold(active); p.setFont(f)
+            p.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), text)
+        p.end()
+
+
 class ModalOverlay(QWidget):
     """Полупрозрачный затемняющий слой поверх главного окна."""
 
@@ -1611,10 +2495,25 @@ class AnalysisThread(QThread):
         self.pdfs = pdfs; self.force_bw = force_bw; self.count_fill = count_fill
         self._user_action = self._user_value = None
         self._stop_requested = False
-        import threading; self._wait_event = threading.Event()
+        import threading; self._wait_event = threading.Event(); self._pause_event = threading.Event()
 
     def request_stop(self):
-        self._stop_requested = True; self._user_action = "skip"; self._user_value = None; self._wait_event.set()
+        self._stop_requested = True; self._user_action = "skip"; self._user_value = None
+        self._pause_event.clear(); self._wait_event.set()
+
+    def request_pause(self):
+        self._pause_event.set()
+
+    def request_resume(self):
+        self._pause_event.clear()
+
+    def is_paused(self):
+        return self._pause_event.is_set()
+
+    def _pause_point(self):
+        """Блокирует поток, пока включена пауза (или пока не запрошен стоп)."""
+        while self._pause_event.is_set() and not self._stop_requested:
+            time.sleep(0.05)
 
     def set_user_response(self, action, value):
         self._user_action = action; self._user_value = value; self._wait_event.set()
@@ -1622,93 +2521,54 @@ class AnalysisThread(QThread):
     def _wait_for_user(self):
         self._wait_event.clear(); self._wait_event.wait()
 
-    def detect_page_color(self, page, tol=15, white_thr=248,
-                          min_colored_pixels=30, min_colored_ratio=0.00005,
-                          pastel_ratio_threshold=0.02):
-        """Определяет цветная ли страница (учитывает пастельные фоны)."""
+    def analyze_page(self, page, tol=12, white_thr=252, color_tol=15,
+                     color_white_thr=248, min_colored_pixels=30,
+                     min_colored_ratio=0.00005, pastel_ratio_threshold=0.02):
+        """Один рендер страницы вместо трёх.
+
+        Возвращает (цветная_страница, цветная_заливка%, покрытие%):
+        цветность — как detect_page_color (учитывает пастельные фоны),
+        покрытие% — доля всех не-белых пикселей (единая метрика заливки).
+        """
         try:
-            scale = 200/72
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale,scale), colorspace=fitz.csRGB, alpha=False)
-            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            a = np.asarray(img, dtype=np.uint8)
-            if a.ndim != 3: return False
-            r=a[...,0].astype(np.int16); g=a[...,1].astype(np.int16); b=a[...,2].astype(np.int16)
-            mx=np.maximum(np.maximum(r,g),b); mn=np.minimum(np.minimum(r,g),b)
-            diff = mx - mn
-
-            # Проверка 1: тёмные цветные пиксели (текст, графика)
-            ink = mx < white_thr; ic=int(ink.sum())
-            if ic > 0:
-                colored_dark = ink & (diff > tol)
-                cc = int(colored_dark.sum())
-                if cc >= min_colored_pixels or (cc/ic) >= min_colored_ratio:
-                    return True
-
-            # Проверка 2: светлые цветные пиксели (пастельные фоны)
-            not_pure_white = (mx > 180) & (mx < 254)
-            pastel = not_pure_white & (diff >= 5)
-            total_pixels = a.shape[0] * a.shape[1]
-            pastel_count = int(pastel.sum())
-            if total_pixels > 0:
-                if (pastel_count / total_pixels) >= pastel_ratio_threshold:
-                    return True
-
-            return False
-        except Exception: return False
-
-    def detect_page_fill(self, page, min_fill_ratio=0.50, tol=12):
-        """Цветная заливка более 50% площади страницы."""
-        try:
-            scale = 200 / 72
+            scale = PAGE_ANALYSIS_DPI / 72
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
             )
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
             a = np.asarray(img, dtype=np.uint8)
             if a.ndim != 3:
-                return False
+                return (False, 0.0, 0.0)
             r = a[..., 0].astype(np.int16)
             g = a[..., 1].astype(np.int16)
             b = a[..., 2].astype(np.int16)
             mx = np.maximum(np.maximum(r, g), b)
             mn = np.minimum(np.minimum(r, g), b)
             diff = mx - mn
-            not_white = mx < 252
-            colored = not_white & (diff >= tol)
             total = a.shape[0] * a.shape[1]
             if total <= 0:
-                return False
-            return (int(colored.sum()) / total) >= min_fill_ratio
-        except Exception:
-            return False
+                return (False, 0.0, 0.0)
 
-    def calc_page_fill_pct(self, page, tol=12, white_thr=252):
-        """Возвращает (цветная_заливка%, чб_заливка%) — (0.0–100.0, 0.0–100.0)."""
-        try:
-            scale = 200 / 72
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
-            )
-            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            a = np.asarray(img, dtype=np.uint8)
-            if a.ndim != 3:
-                return (0.0, 0.0)
-            r = a[..., 0].astype(np.int16)
-            g = a[..., 1].astype(np.int16)
-            b = a[..., 2].astype(np.int16)
-            mx = np.maximum(np.maximum(r, g), b)
-            mn = np.minimum(np.minimum(r, g), b)
-            diff = mx - mn
             not_white = mx < white_thr
             colored = not_white & (diff >= tol)
-            total = a.shape[0] * a.shape[1]
-            if total <= 0:
-                return (0.0, 0.0)
             color_pct = round(100.0 * int(colored.sum()) / total, 2)
             ink_pct = round(100.0 * int(not_white.sum()) / total, 2)
-            return (color_pct, ink_pct)
+
+            is_color = False
+            ink_dark = mx < color_white_thr
+            ic = int(ink_dark.sum())
+            if ic > 0:
+                cc = int((ink_dark & (diff > color_tol)).sum())
+                if cc >= min_colored_pixels or (cc / ic) >= min_colored_ratio:
+                    is_color = True
+            if not is_color:
+                pastel = (mx > 180) & (mx < 254) & (diff >= 5)
+                if int(pastel.sum()) / total >= pastel_ratio_threshold:
+                    is_color = True
+
+            return (is_color, color_pct, ink_pct)
         except Exception:
-            return (0.0, 0.0)
+            return (False, 0.0, 0.0)
 
     def match_format_with_tolerance(self, w, h, table, tol=FORMAT_TOLERANCE_MM):
         for name,(fw,fh) in table.items():
@@ -1721,6 +2581,8 @@ class AnalysisThread(QThread):
             grand=defaultdict(float); total_source=0; file_page_counts=[]; file_details=[]; total_files=len(self.pdfs)
             for file_idx, pdf_path in enumerate(self.pdfs):
                 if self._stop_requested: break
+                self._pause_point()
+                if self._stop_requested: break
                 try:
                     with fitz.open(pdf_path) as doc:
                         total=len(doc); total_source+=total; file_page_counts.append(total)
@@ -1729,17 +2591,17 @@ class AnalysisThread(QThread):
                         cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]; file_fill_pcts={}
                         for i,p in enumerate(doc):
                             if self._stop_requested: break
+                            self._pause_point()
+                            if self._stop_requested: break
                             pn=i+1
                             w, h = page_size_mm(p)
-                            col = False if self.force_bw else self.detect_page_color(p)
-                            has_fill = (
-                                self.count_fill and not self.force_bw and col
-                                and self.detect_page_fill(p)
-                            )
-                            if has_fill:
-                                file_fill_pages.append(pn)
-                            if self.count_fill:
-                                file_fill_pcts[pn] = self.calc_page_fill_pct(p)
+                            if self.count_fill and not self.force_bw:
+                                col, color_pct, ink_pct = self.analyze_page(p)
+                                file_fill_pcts[pn] = (color_pct, ink_pct)
+                                if ink_pct > FILL_MIN_RATIO * 100:
+                                    file_fill_pages.append(pn)
+                            else:
+                                col = False if self.force_bw else self.analyze_page(p)[0]
                             fA=self.match_format_with_tolerance(w,h,ISO_A)
                             fN=self.match_format_with_tolerance(w,h,ISO_A_NONSTANDARD)
                             if fA:
@@ -1751,6 +2613,8 @@ class AnalysisThread(QThread):
                         if self._stop_requested:
                             file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts}); break
                         for (w,h,col),pages in cg.items():
+                            if self._stop_requested: break
+                            self._pause_point()
                             if self._stop_requested: break
                             self.need_user_input.emit(w,h,col,pages,pdf_path); self._wait_for_user()
                             if self._stop_requested: break
@@ -1820,73 +2684,118 @@ class AnalysisThread(QThread):
 # Главное окно
 # ─────────────────────────────────────────────────────────────────────────────
 class DropArea(QFrame):
-    """Область только для перетаскивания файлов/папок."""
+    """Область для перетаскивания и клика (открывает выбор папки/файлов)."""
 
     files_dropped = pyqtSignal(list)
+    clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setMinimumHeight(110)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self._default_style = (
-            "DropArea { background-color: #fafbfc; border: 2px dashed #b3d4f5; "
-            "border-radius: 8px; }"
+            f"DropArea {{ background-color: {THEME['surface_alt']}; "
+            f"border: 2px dashed {THEME['primary_border']}; border-radius: {THEME['r_xl']}; }}"
         )
         self._hover_style = (
-            "DropArea { background-color: #d6eaff; border: 2px dashed #0066cc; "
-            "border-radius: 8px; }"
+            f"DropArea {{ background-color: {THEME['primary_soft']}; "
+            f"border: 2px dashed {THEME['primary']}; border-radius: {THEME['r_xl']}; }}"
         )
         self._selected_style = (
-            "DropArea { background-color: #ecf7ec; border: 2px dashed #2e7d32; "
-            "border-radius: 8px; }"
+            f"DropArea {{ background-color: {THEME['success_soft']}; "
+            f"border: 2px dashed {THEME['success']}; border-radius: {THEME['r_xl']}; }}"
         )
         self.setStyleSheet(self._default_style)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(6)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Вертикальное центрирование через stretch: без AlignCenter, иначе метки
+        # сжимаются по sizeHint и длинный путь не помещается (обрезается в пустоту).
+        layout.addStretch()
 
         self.icon_label = QLabel("📥")
-        self.icon_label.setFont(QFont("Arial", 22))
+        self.icon_label.setFont(QFont("Segoe UI Emoji", 30))
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.icon_label.setStyleSheet("background:transparent;border:none;")
+        self.icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.icon_label)
 
         self.title_label = QLabel("Переместите сюда папку или файл")
-        self.title_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Segoe UI Variable Display", 11, QFont.Weight.DemiBold))
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label.setStyleSheet(
-            "color:#0066cc;background:transparent;border:none;"
+            f"color:{THEME['primary']};background:transparent;border:none;"
         )
         self.title_label.setWordWrap(True)
+        # Клик по тексту должен открывать проводник, а не выделять текст.
+        self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        # Длинный путь не должен влиять на минимальную ширину окна.
+        self.title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.title_label.setMinimumWidth(0)
         layout.addWidget(self.title_label)
+
+        self.sub_label = QLabel("нажмите, чтобы выбрать папку или файлы")
+        self.sub_label.setFont(QFont("Segoe UI", 9))
+        self.sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sub_label.setStyleSheet(
+            f"color:{THEME['text_muted']};background:transparent;border:none;"
+        )
+        self.sub_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout.addWidget(self.sub_label)
+        layout.addStretch()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def set_selected_path(self, path, info_suffix=""):
         self.setStyleSheet(self._selected_style)
         self.icon_label.setText("")
         self.icon_label.setVisible(False)
+        self.sub_label.setVisible(False)
         display = path if not info_suffix else f"{path}  {info_suffix}"
-        self.title_label.setText(display)
-        self.title_label.setFont(QFont("Arial", 9))
+        self._full_text = display
+        self.title_label.setFont(QFont("Segoe UI", 9))
         self.title_label.setWordWrap(False)
         self.title_label.setStyleSheet(
-            "color:#2e7d32;background:transparent;border:none;"
+            f"color:{THEME['success']};background:transparent;border:none;"
         )
-        self.title_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        # Длинный путь не должен растягивать окно: обрезаем, полный — в подсказке.
+        self.title_label.setToolTip(display)
+        self._update_elide()
+
+    def _update_elide(self):
+        text = getattr(self, "_full_text", "")
+        if not text:
+            return
+        width = max(40, self.title_label.width())
+        metrics = QFontMetrics(self.title_label.font())
+        self.title_label.setText(
+            metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, width)
         )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elide()
 
     def reset(self):
         self.setStyleSheet(self._default_style)
+        self._full_text = ""
         self.icon_label.setText("📥")
         self.icon_label.setVisible(True)
+        self.sub_label.setVisible(True)
         self.title_label.setText("Переместите сюда папку или файл")
-        self.title_label.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        self.title_label.setToolTip("")
+        self.title_label.setFont(QFont("Segoe UI Variable Display", 11, QFont.Weight.DemiBold))
         self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet(
-            "color:#0066cc;background:transparent;border:none;"
+            f"color:{THEME['primary']};background:transparent;border:none;"
         )
 
     def dragEnterEvent(self, event):
@@ -1937,16 +2846,393 @@ class DropArea(QFrame):
         self.files_dropped.emit(paths)
 
 
+class PathPickerDialog(QDialog):
+    """Проводник в стиле программы: быстрый доступ слева, адресная строка,
+    выбор папки или одного/нескольких PDF.
+
+    Открывается в папке «Загрузки». В адресную строку можно вручную вписать
+    путь к папке или файлу и нажать Enter.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Выбор папки или PDF файлов")
+        self.resize(860, 600)
+        self._cwd = self._default_dir()
+        self._history = []
+        self._selected_files = []
+        self.setStyleSheet(f"QDialog {{ background-color: {THEME['bg']}; color: {THEME['text']}; }}")
+
+        root = QVBoxLayout(self); root.setContentsMargins(14, 14, 14, 14); root.setSpacing(10)
+
+        # Навигация
+        nav = QHBoxLayout(); nav.setSpacing(8)
+        self.btn_back = QPushButton("←  Назад")
+        self.btn_back.setToolTip("Перейти в папку выше")
+        self.btn_back.setStyleSheet(_qss_button("tonal")); self.btn_back.clicked.connect(self._go_up)
+        nav.addWidget(self.btn_back)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Введите путь к папке или файлу и нажмите Enter")
+        self.path_edit.setStyleSheet(
+            f"QLineEdit{{background-color:{THEME['surface']};border:1px solid {THEME['border']};"
+            f"border-radius:{THEME['r_md']};padding:9px 12px;color:{THEME['text']};}}"
+            f"QLineEdit:focus{{border:1px solid {THEME['primary']};}}"
+        )
+        self.path_edit.returnPressed.connect(self._navigate_from_edit)
+        nav.addWidget(self.path_edit, stretch=1)
+        root.addLayout(nav)
+
+        # Тело: быстрый доступ + список
+        body = QHBoxLayout(); body.setSpacing(10)
+
+        side = QVBoxLayout(); side.setSpacing(6)
+        self.quick = QListWidget()
+        self.quick.setFixedWidth(180)
+        self.quick.setStyleSheet(
+            f"QListWidget{{background-color:{THEME['surface']};color:{THEME['text']};"
+            f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};outline:none;padding:4px;}}"
+            f"QListWidget::item{{padding:8px 8px;border-radius:{THEME['r_sm']};}}"
+            f"QListWidget::item:selected{{background-color:{THEME['primary_soft']};color:{THEME['primary_text']};}}"
+        )
+        self._populate_quick()
+        self.quick.itemClicked.connect(self._on_quick_click)
+        side.addWidget(self.quick, stretch=1)
+        body.addLayout(side)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["Имя", "Дата изменения"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setShowGrid(False)
+        self.table.setSortingEnabled(False)
+        self.table.itemDoubleClicked.connect(self._on_double_click)
+        self.table.installEventFilter(self)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSortIndicatorShown(True)
+        hdr.setSectionsClickable(True)
+        hdr.sortIndicatorChanged.connect(self._on_sort_changed)
+        self.table.setStyleSheet(
+            f"QTableWidget{{background-color:{THEME['surface']};color:{THEME['text']};"
+            f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};outline:none;}}"
+            f"QTableWidget::item{{padding:6px 8px;border-bottom:1px solid {THEME['divider']};}}"
+            f"QTableWidget::item:selected{{background-color:{THEME['primary_soft']};color:{THEME['primary_text']};}}"
+        )
+        self._sort_col = 0
+        self._sort_order = Qt.SortOrder.AscendingOrder
+        self._rows = []
+        self._icon_cache = {}
+        body.addWidget(self.table, stretch=1)
+        root.addLayout(body, stretch=1)
+
+        self.hint = QLabel("Двойной клик по папке — войти. Выберите папку или один/несколько PDF (Ctrl/Shift) и нажмите «Выбрать».")
+        self.hint.setStyleSheet(f"color:{THEME['text_muted']};font-size:12px;background:transparent;")
+        self.hint.setWordWrap(True)
+        root.addWidget(self.hint)
+
+        # Кнопки
+        btns = QHBoxLayout(); btns.setSpacing(10); btns.addStretch()
+        btn_cancel = QPushButton("Отмена"); btn_cancel.setStyleSheet(_qss_button("neutral"))
+        btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(btn_cancel)
+        btn_pick_folder = QPushButton("📂  Выбрать папку"); btn_pick_folder.setStyleSheet(_qss_button("tonal"))
+        btn_pick_folder.clicked.connect(self._pick_folder)
+        btns.addWidget(btn_pick_folder)
+        btn_ok = QPushButton("✅  Выбрать"); btn_ok.setStyleSheet(_qss_button("filled"))
+        btn_ok.clicked.connect(self._pick_selected)
+        btns.addWidget(btn_ok)
+        root.addLayout(btns)
+
+        self._refresh()
+
+    def _default_dir(self):
+        """Стартовая папка — «Загрузки», с откатом на домашнюю."""
+        candidates = [
+            os.path.join(os.path.expanduser("~"), "Downloads"),
+            os.path.join(os.path.expanduser("~"), "Загрузки"),
+        ]
+        for c in candidates:
+            if os.path.isdir(c):
+                return c
+        return os.path.expanduser("~")
+
+    def _populate_quick(self):
+        home = os.path.expanduser("~")
+        places = [
+            ("💻  Мой компьютер", None),
+            ("⬇  Загрузки", self._default_dir()),
+            ("🖥  Рабочий стол", os.path.join(home, "Desktop")),
+            ("📄  Документы", os.path.join(home, "Documents")),
+            ("🖼  Изображения", os.path.join(home, "Pictures")),
+        ]
+        for label, path in places:
+            if path is None or os.path.isdir(path):
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                self.quick.addItem(item)
+
+    def _list_drives(self):
+        """Список доступных дисков Windows."""
+        drives = []
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{letter}:\\"
+            if os.path.exists(root):
+                drives.append(root)
+        return drives
+
+    def _on_quick_click(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path is None:
+            # «Мой компьютер» — показываем список дисков
+            self._rows = []
+            self._cwd = "Мой компьютер"
+            self.path_edit.setText(self._cwd)
+            for drive in self._list_drives():
+                try:
+                    mtime = os.path.getmtime(drive)
+                except Exception:
+                    mtime = 0
+                self._rows.append({"kind": "dir", "path": drive, "name": drive, "mtime": mtime})
+            self._refresh_highlight = None
+            self._populate_table()
+            return
+        if os.path.isdir(path):
+            self._navigate_to(path)
+
+    def _navigate_from_edit(self):
+        raw = self.path_edit.text().strip().strip('"')
+        if not raw:
+            return
+        if os.path.isdir(raw):
+            self._navigate_to(os.path.abspath(raw))
+        elif os.path.isfile(raw):
+            # Если ввели путь к файлу — открываем его папку и выделяем файл
+            self._navigate_to(os.path.dirname(os.path.abspath(raw)))
+            self._refresh(highlight=os.path.abspath(raw))
+        else:
+            self.hint.setText("❌ Путь не найден: " + raw)
+
+    def _file_icon(self, kind):
+        """Иконки: жёлтая папка и красный PDF-документ (рисуются кодом)."""
+        key = kind
+        if key in self._icon_cache:
+            return self._icon_cache[key]
+        from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QPen
+        px = QPixmap(20, 20); px.fill(Qt.GlobalColor.transparent)
+        p = QPainter(px); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if kind == "dir":
+            body = QPainterPath()
+            body.addRoundedRect(1, 5, 18, 12, 2.5, 2.5)
+            tab = QPainterPath()
+            tab.addRoundedRect(1, 3, 9, 6, 2, 2)
+            p.fillPath(tab, QColor("#F6C452"))
+            p.fillPath(body, QColor("#FBCB4A"))
+            p.setPen(QPen(QColor("#E0A800"), 1))
+            p.drawPath(body)
+        elif kind == "up":
+            body = QPainterPath()
+            body.addRoundedRect(1, 6, 18, 11, 2.5, 2.5)
+            p.fillPath(body, QColor("#D7D9E3"))
+            p.setPen(QPen(QColor("#9AA0B4"), 1.4))
+            p.drawLine(6, 5, 10, 1)
+            p.drawLine(10, 1, 14, 5)
+        else:
+            doc = QPainterPath()
+            doc.addRoundedRect(2, 1, 16, 18, 2.5, 2.5)
+            p.fillPath(doc, QColor("#E5484D"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#FFFFFF"))
+            f = QFont("Segoe UI", 6, QFont.Weight.Bold)
+            p.setFont(f)
+            p.drawText(px.rect(), int(Qt.AlignmentFlag.AlignCenter), "PDF")
+        p.end()
+        self._icon_cache[key] = QIcon(px)
+        return self._icon_cache[key]
+
+    def _on_sort_changed(self, col, order):
+        self._sort_col = col
+        self._sort_order = order
+        self._populate_table()
+
+    def _refresh(self, highlight=None):
+        self.path_edit.setText(self._cwd)
+        self._rows = []
+        parent_dir = QFileInfo(self._cwd).dir()
+        if parent_dir.exists() and parent_dir.absolutePath() != self._cwd:
+            self._rows.append({"kind": "up", "path": parent_dir.absolutePath(),
+                               "name": "..", "mtime": 0})
+        try:
+            entries = os.listdir(self._cwd)
+        except Exception:
+            entries = []
+        for name in entries:
+            full = os.path.join(self._cwd, name)
+            try:
+                mtime = os.path.getmtime(full)
+            except Exception:
+                mtime = 0
+            if os.path.isdir(full):
+                self._rows.append({"kind": "dir", "path": full, "name": name, "mtime": mtime})
+            elif name.lower().endswith(".pdf"):
+                self._rows.append({"kind": "pdf", "path": full, "name": name, "mtime": mtime})
+        self._refresh_highlight = highlight
+        self._populate_table()
+
+    def _populate_table(self):
+        from datetime import datetime
+        self.table.setSortingEnabled(False)
+        # Папки всегда выше файлов, внутри — сортировка по выбранному столбцу
+        col = self._sort_col
+        desc = self._sort_order == Qt.SortOrder.DescendingOrder
+        def key(r):
+            if col == 1:
+                return (r["kind"] != "up", 0 if r["kind"] == "dir" else 1, r["mtime"])
+            return (r["kind"] != "up", 0 if r["kind"] == "dir" else 1, r["name"].lower())
+        rows = sorted(self._rows, key=key, reverse=desc)
+        # «..» и папки держим сверху независимо от направления
+        ups = [r for r in rows if r["kind"] == "up"]
+        dirs = [r for r in rows if r["kind"] == "dir"]
+        pdfs = [r for r in rows if r["kind"] == "pdf"]
+        rows = ups + dirs + pdfs
+
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(rows))
+        highlight = getattr(self, "_refresh_highlight", None)
+        for i, r in enumerate(rows):
+            name_item = QTableWidgetItem(r["name"])
+            name_item.setIcon(self._file_icon(r["kind"]))
+            name_item.setData(Qt.ItemDataRole.UserRole, (r["kind"], r["path"]))
+            if r["kind"] == "up":
+                f = name_item.font(); f.setBold(True); name_item.setFont(f)
+            self.table.setItem(i, 0, name_item)
+            if r["kind"] == "pdf":
+                dt = datetime.fromtimestamp(r["mtime"]).strftime("%d.%m.%Y %H:%M") if r["mtime"] else "—"
+            else:
+                dt = "—"
+            date_item = QTableWidgetItem(dt)
+            date_item.setForeground(QColor(THEME["text_muted"]))
+            self.table.setItem(i, 1, date_item)
+            if highlight and os.path.abspath(r["path"]) == highlight:
+                self.table.selectRow(i)
+        if highlight:
+            self.hint.setText("Файл найден и выделен — нажмите «Выбрать».")
+        elif not rows:
+            self.hint.setText("Папка пуста или нет доступных PDF. Поднимитесь выше.")
+
+    def _go_up(self):
+        """«Назад» — подняться ровно на один уровень выше."""
+        if self._cwd == "Мой компьютер":
+            return
+        parent = QFileInfo(self._cwd).dir()
+        if parent.absolutePath() and parent.absolutePath() != self._cwd:
+            self._cwd = parent.absolutePath(); self._refresh()
+
+    def _navigate_to(self, path):
+        self._cwd = path
+        self._refresh()
+
+    def eventFilter(self, obj, event):
+        """Enter/Return на выделенной строке: папка — войти, PDF — выбрать."""
+        if obj is getattr(self, "table", None):
+            if event.type() == QEvent.Type.KeyPress and event.key() in (
+                Qt.Key.Key_Return, Qt.Key.Key_Enter,
+            ):
+                self._open_current_row()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _open_current_row(self):
+        row = self.table.currentRow()
+        if row < 0:
+            sel = self.table.selectionModel().selectedRows()
+            row = sel[0].row() if sel else -1
+        if row < 0:
+            return
+        cell = self.table.item(row, 0)
+        if cell is None:
+            return
+        kind, path = cell.data(Qt.ItemDataRole.UserRole)
+        if kind in ("dir", "up"):
+            self._navigate_to(path)
+        elif kind == "pdf":
+            self._selected_files = [path]
+            self.accept()
+
+    def _on_activated(self, index):
+        """Запасной путь для сигнала activated."""
+        self._open_current_row()
+
+    def _on_double_click(self, item):
+        row = item.row()
+        cell = self.table.item(row, 0)
+        if cell is None:
+            return
+        kind, path = cell.data(Qt.ItemDataRole.UserRole)
+        if kind in ("dir", "up"):
+            self._navigate_to(path)
+
+    def _selected_pdf_paths(self):
+        files = []
+        for idx in self.table.selectionModel().selectedRows():
+            cell = self.table.item(idx.row(), 0)
+            if cell is None:
+                continue
+            kind, path = cell.data(Qt.ItemDataRole.UserRole)
+            if kind == "pdf":
+                files.append(path)
+        return files
+
+    def _selected_dir_path(self):
+        """Путь выделенной папки (или «..»), иначе None."""
+        rows = self.table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        cell = self.table.item(rows[0].row(), 0)
+        if cell is None:
+            return None
+        kind, path = cell.data(Qt.ItemDataRole.UserRole)
+        if kind in ("dir", "up"):
+            return path
+        return None
+
+    def _pick_folder(self):
+        # Если выделена папка (или «..») — выбираем именно её,
+        # иначе считаем выбранной текущую открытую папку.
+        selected_dir = self._selected_dir_path()
+        self._selected_files = [selected_dir or self._cwd]
+        self.accept()
+
+    def _pick_selected(self):
+        files = self._selected_pdf_paths()
+        if files:
+            self._selected_files = files
+            self.accept()
+            return
+        # Если выделена папка (или «..») — выбираем её,
+        # иначе берём текущую открытую папку.
+        selected_dir = self._selected_dir_path()
+        self._selected_files = [selected_dir or self._cwd]
+        self.accept()
+
+    def selected_paths(self):
+        return list(self._selected_files)
+
+
 class PrintingCalculator(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Калькулятор расчёта проектной документации")
-        self.setGeometry(100,100,1200,700)
+        self.setGeometry(100,100,1000,640)
+        self.setMinimumSize(980, 620)
         self.setAcceptDrops(True)
         icon_path = resource_path("logo.ico")
         if os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
-        self.primary_color="#0066cc"; self.danger_color="#d33"; self.bg_color="#f5f6f7"
-        self.card_color="#ffffff"; self.text_color="#333333"
+        self.primary_color=THEME["primary"]; self.danger_color=THEME["danger"]; self.bg_color=THEME["bg"]
+        self.card_color=THEME["surface"]; self.text_color=THEME["text"]; self.theme=THEME
         self.apply_style()
         self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
         self.selected_path=""; self.copies=1; self.force_bw=False; self.count_fill=True
@@ -1955,6 +3241,8 @@ class PrintingCalculator(QMainWindow):
         self.need_binding_a4=self.need_binding_a3=False
         self.thread=self.current_dialog=None; self._history_items=[]
         self.init_ui()
+        # Компактный стартовый размер: ширина — до края вкладки «Заливка»
+        QTimer.singleShot(0, self._reset_window_size)
         QTimer.singleShot(100, self.refresh_history)
 
     def _apply_selected_path(self, path):
@@ -1978,282 +3266,630 @@ class PrintingCalculator(QMainWindow):
         except Exception as e: QMessageBox.critical(self,"Ошибка сохранения",f"Не удалось сохранить файл:\n{e}")
 
     def apply_style(self):
+        t = THEME
+        font = t["font"]
+        # Современный визуальный язык 2026: aurora-градиенты, bento-карточки,
+        # крупные радиусы, мягкие тени, отсутствие жёстких рамок.
         self.setStyleSheet(f"""
-            QMainWindow,QWidget{{background-color:{self.bg_color};color:{self.text_color};}}
-            QTabWidget::pane{{border:1px solid #ddd;background-color:{self.bg_color};color:{self.text_color};}}
-            QTabBar::tab{{background-color:#e8e8e8;padding:8px 20px;margin-right:2px;border:1px solid #ddd;color:{self.text_color};font-weight:bold;}}
-            QTabBar::tab:selected{{background-color:{self.primary_color};color:white;}}
-            QFrame{{background-color:{self.card_color};border-radius:4px;border:1px solid #e0e0e0;color:{self.text_color};}}
-            QGroupBox{{background-color:{self.card_color};border:1px solid #d0d0d0;border-radius:6px;margin-top:8px;padding-top:4px;font-weight:bold;color:{self.text_color};}}
-            QGroupBox::title{{subcontrol-origin:margin;subcontrol-position:top left;padding:0 6px;color:{self.text_color};}}
-            QPushButton{{background-color:{self.primary_color};color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;font-size:11px;}}
-            QPushButton:hover{{background-color:#0052a3;}}
-            QPushButton:pressed{{background-color:#003d7a;}}
-            QPushButton:disabled{{background-color:#bbb;color:#eee;}}
-            QLabel{{color:{self.text_color};background:transparent;}}
-            QLineEdit{{background-color:white;border:1px solid #ccc;border-radius:4px;padding:4px 6px;color:{self.text_color};}}
-            QTextEdit{{background-color:{self.card_color};border:1px solid #e0e0e0;border-radius:4px;color:{self.text_color};selection-background-color:#cce4ff;selection-color:#000;}}
-            QSpinBox{{
-                background-color:white;color:{self.text_color};
-                border:1px solid #888;border-radius:4px;padding:2px 24px 2px 6px;min-height:28px;
+            QMainWindow, QWidget {{ background-color:{t['bg']}; color:{t['text']}; font-family:{font}; font-size:13px; }}
+            QScrollArea, QScrollArea > QWidget > QWidget {{ background-color:{t['bg']}; border:none; }}
+
+            /* ── Навигация: pill-вкладки с заметным активным состоянием ── */
+            QTabWidget {{ background: transparent; }}
+            QTabWidget::pane {{ border:none; background-color:{t['bg']}; margin-top:10px; }}
+            QTabBar {{ background: transparent; qproperty-drawBase:0; }}
+            QTabBar::tab {{
+                background-color:{t['surface_sunken']}; color:{t['text_muted']};
+                padding:10px 18px; margin:0 6px 0 0; min-height:22px;
+                border:none; border-radius:{t['r_sm']};
+                font-weight:600; font-size:13px;
             }}
-            QSpinBox::up-button{{
-                subcontrol-origin:border;subcontrol-position:top right;
-                width:22px;border-left:1px solid #888;background-color:#e0e0e0;
+            QTabBar::tab:hover {{ color:{t['text']}; background-color:{t['surface_high']}; }}
+            QTabBar::tab:selected {{
+                color:{t['text_on_primary']}; background-color:{t['primary']};
             }}
-            QSpinBox::down-button{{
-                subcontrol-origin:border;subcontrol-position:bottom right;
-                width:22px;border-left:1px solid #888;background-color:#e0e0e0;
+
+            /* ── Карточки ── */
+            QFrame#Card {{
+                background-color:{t['surface']}; border:1px solid {t['divider']};
+                border-radius:{t['r_lg']};
             }}
-            QSpinBox::up-button:hover,QSpinBox::down-button:hover{{background-color:#c8c8c8;}}
-            QCheckBox{{color:{self.text_color};background:transparent;spacing:8px;font-size:11px;}}
-            QCheckBox::indicator{{width:18px;height:18px;border:2px solid #666;border-radius:3px;background:white;}}
-            QCheckBox::indicator:hover{{border-color:{self.primary_color};}}
-            QCheckBox::indicator:checked{{background-color:{self.primary_color};border-color:{self.primary_color};}}
-            QCheckBox::indicator:disabled{{background-color:#eee;border-color:#ccc;}}
-            QRadioButton{{background-color:transparent;color:{self.text_color};padding:4px 8px;font-weight:normal;spacing:8px;}}
-            QRadioButton::indicator{{width:16px;height:16px;}}
-            QRadioButton::indicator:unchecked{{background-color:white;border:2px solid #ccc;border-radius:9px;}}
-            QRadioButton::indicator:checked{{background-color:{self.primary_color};border:2px solid {self.primary_color};border-radius:9px;}}
-            QRadioButton:disabled{{color:#aaa;}}
-            QRadioButton::indicator:disabled{{background-color:#eee;border:2px solid #ddd;}}
-            QTableWidget{{background-color:white;color:{self.text_color};gridline-color:#ddd;selection-background-color:#cce4ff;selection-color:#000;}}
-            QHeaderView::section{{background-color:#e8e8e8;padding:6px;border:1px solid #ddd;font-weight:bold;color:{self.text_color};}}
-            QProgressBar{{border:1px solid #ddd;border-radius:4px;text-align:center;height:25px;color:{self.text_color};background-color:white;}}
-            QProgressBar::chunk{{background-color:{self.primary_color};}}
-            QScrollArea{{background-color:{self.bg_color};color:{self.text_color};border:none;}}
-            QToolTip{{background-color:#ffffcc;color:#333;border:1px solid #999;padding:4px;}}
-            QMessageBox{{background-color:{self.bg_color};color:{self.text_color};}}
+            QGroupBox {{
+                background-color:{t['surface']}; border:1px solid {t['divider']};
+                border-radius:{t['r_lg']}; margin-top:16px; padding:18px 16px 14px 16px;
+                font-weight:600; font-size:13px; color:{t['text']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin:margin; subcontrol-position:top left;
+                left:18px; padding:0 6px; color:{t['text']};
+            }}
+
+            /* ── Кнопки: скруглённые углы ── */
+            QPushButton {{
+                background-color:{t['primary']}; color:{t['text_on_primary']};
+                border:none; border-radius:{t['r_md']}; padding:10px 22px;
+                font-weight:600; font-size:13px; min-height:20px;
+            }}
+            QPushButton:hover {{ background-color:{t['primary_hover']}; }}
+            QPushButton:pressed {{ background-color:{t['primary_press']}; }}
+            QPushButton:disabled {{ background-color:{t['disabled_bg']}; color:{t['disabled_fg']}; }}
+            QPushButton:focus {{ outline:none; }}
+
+            QLabel {{ color:{t['text']}; background:transparent; }}
+
+            /* ── Поля ввода ── */
+            QLineEdit {{
+                background-color:{t['surface_sunken']}; border:1px solid transparent;
+                border-radius:{t['r_md']}; padding:10px 14px; color:{t['text']};
+                selection-background-color:{t['primary_soft']}; selection-color:{t['primary_text']};
+            }}
+            QLineEdit:focus {{ border:1px solid {t['primary']}; background-color:{t['surface']}; }}
+            QLineEdit:disabled {{ background-color:{t['disabled_bg']}; color:{t['disabled_fg']}; }}
+
+            QTextEdit {{
+                background-color:{t['surface_alt']}; border:1px solid {t['divider']};
+                border-radius:{t['r_md']}; color:{t['text']}; padding:12px;
+                selection-background-color:{t['primary_soft']}; selection-color:{t['primary_text']};
+            }}
+            QTextEdit:focus {{ border:1px solid {t['primary']}; }}
+
+            QSpinBox {{
+                background-color:{t['surface_sunken']}; color:{t['text']};
+                border:1px solid transparent; border-radius:{t['r_md']};
+                padding:6px 26px 6px 14px; min-height:32px;
+            }}
+            QSpinBox:focus {{ border:1px solid {t['primary']}; background-color:{t['surface']}; }}
+            QSpinBox::up-button {{
+                subcontrol-origin:border; subcontrol-position:top right;
+                width:22px; border:none; background-color:{t['surface_sunken']};
+            }}
+            QSpinBox::down-button {{
+                subcontrol-origin:border; subcontrol-position:bottom right;
+                width:22px; border:none; background-color:{t['surface_sunken']};
+            }}
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background-color:{t['surface_high']}; }}
+
+            /* ── Чекбокс-свитч ── */
+            QCheckBox {{ color:{t['text']}; background:transparent; spacing:10px; font-size:13px; }}
+            QCheckBox::indicator {{
+                width:46px; height:26px; border:none;
+                border-radius:13px; background:{t['disabled_bg']};
+            }}
+            QCheckBox::indicator:hover {{ background:{t['surface_high']}; }}
+            QCheckBox::indicator:checked {{ background-color:{t['success']}; }}
+            QCheckBox::indicator:checked:hover {{ background-color:{t['success_hover']}; }}
+            QCheckBox::indicator:disabled {{ background:{t['disabled_bg']}; }}
+            QCheckBox:disabled {{ color:{t['disabled_fg']}; }}
+
+            /* ── Радио: segmented control ── */
+            QRadioButton {{
+                background-color:{t['seg_track']}; color:{t['text_muted']};
+                padding:9px 20px; font-weight:600; font-size:13px; spacing:0;
+                border-radius:{t['r_pill']}; margin-right:4px;
+            }}
+            QRadioButton:hover {{ color:{t['text']}; }}
+            QRadioButton::indicator {{ width:0; height:0; }}
+            QRadioButton:checked {{
+                background-color:{t['surface']}; color:{t['primary_text']};
+                border:1px solid {t['primary_border']};
+            }}
+            QRadioButton:disabled {{ color:{t['disabled_fg']}; background:{t['disabled_bg']}; }}
+
+            /* ── Таблицы / деревья ── */
+            QTableWidget, QTreeWidget {{
+                background-color:{t['surface']}; alternate-background-color:{t['surface_alt']};
+                color:{t['text']}; gridline-color:transparent;
+                border:1px solid {t['divider']}; border-radius:{t['r_lg']};
+                selection-background-color:{t['primary_soft']}; selection-color:{t['primary_text']};
+                outline:none;
+            }}
+            QTableWidget::item, QTreeWidget::item {{ padding:9px 8px; border-bottom:1px solid {t['divider']}; }}
+            QTableWidget::item:hover, QTreeWidget::item:hover {{ background-color:{t['surface_sunken']}; }}
+            QTableWidget::item:selected, QTreeWidget::item:selected {{
+                background-color:{t['primary_soft']}; color:{t['primary_text']};
+            }}
+            QHeaderView {{ background:transparent; }}
+            QHeaderView::section {{
+                background-color:{t['surface']}; padding:11px 10px;
+                border:none; border-bottom:1px solid {t['border']};
+                font-weight:600; font-size:11px; color:{t['text_muted']};
+            }}
+            QTableCornerButton::section {{ background-color:{t['surface']}; border:none; }}
+
+            /* ── Прогресс: тонкая полоса как .progress ── */
+            QProgressBar {{
+                border:none; border-radius:{t['r_pill']}; text-align:center;
+                height:8px; color:transparent; background-color:{t['surface_high']};
+            }}
+            QProgressBar::chunk {{ background-color:{t['primary']}; border-radius:{t['r_pill']}; }}
+
+            /* ── Скроллбары: синий ползунок в общем стиле ── */
+            QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}
+            QScrollBar::handle:vertical {{
+                background:{t['primary']}; border-radius:5px; min-height:32px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background:{t['primary_hover']}; }}
+            QScrollBar:horizontal {{ background:transparent; height:10px; margin:2px; }}
+            QScrollBar::handle:horizontal {{
+                background:{t['primary']}; border-radius:5px; min-width:32px;
+            }}
+            QScrollBar::handle:horizontal:hover {{ background:{t['primary_hover']}; }}
+            QScrollBar::add-line, QScrollBar::sub-line {{ height:0; width:0; }}
+            QScrollBar::add-page, QScrollBar::sub-page {{ background:transparent; }}
+
+            QToolTip {{
+                background-color:{t['text']}; color:{t['surface']};
+                border:none; border-radius:{t['r_sm']}; padding:7px 10px;
+            }}
+            QMessageBox {{ background-color:{t['surface']}; color:{t['text']}; }}
+            QDialog {{ background-color:{t['bg']}; color:{t['text']}; }}
         """)
 
     def init_ui(self):
-        c=QWidget(); self.setCentralWidget(c); ml=QVBoxLayout(c); ml.setContentsMargins(10,10,10,10); ml.setSpacing(10)
+        c=QWidget(); self.setCentralWidget(c); ml=QVBoxLayout(c); ml.setContentsMargins(18,14,18,14); ml.setSpacing(8)
+
         self.tabs=QTabWidget()
-        self.tabs.addTab(self.create_input_tab(),"📁 Параметры")
-        self.tabs.addTab(self.create_details_tab(),"📊 Детализация файлов")
-        self.tabs.addTab(self.create_manager_tab(),"👔 Для менеджера (CRM)")
-        self.tabs.addTab(self.create_report_tab(),"📄 Для клиента")
-        self.tabs.addTab(self.create_history_tab(),"📚 История расчетов")
-        self.tabs.addTab(self.create_fill_tab(),"🎨 Заливка страниц")
+        self.tabs.addTab(self.create_input_tab(),"📁  Параметры")
+        self.tabs.addTab(self.create_details_tab(),"📊  Детализация")
+        self.tabs.addTab(self.create_manager_tab(),"👔  Менеджер")
+        self.tabs.addTab(self.create_report_tab(),"📄  Клиент")
+        self.tabs.addTab(self.create_history_tab(),"📚  История")
+        self.tabs.addTab(self.create_fill_tab(),"🎨  Заливка")
+        self.tabs.currentChanged.connect(self._animate_tab_switch)
         ml.addWidget(self.tabs)
 
+    def _animate_tab_switch(self, index):
+        """Плавное появление содержимого вкладки (fade, как .tab-pane fade в web)."""
+        widget = self.tabs.widget(index)
+        if widget is None:
+            return
+        try:
+            from PyQt6.QtWidgets import QGraphicsOpacityEffect
+            eff = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(eff)
+            self._fade_widget = widget
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(220)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.finished.connect(lambda: widget.setGraphicsEffect(None))
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._fade_anim = anim
+        except Exception:
+            pass
+        # Вкладка «Менеджер»: пересчёт высот блоков и подгонка окна
+        if index == self._manager_tab_index():
+            QTimer.singleShot(0, self._refit_manager_blocks)
+            QTimer.singleShot(60, self._refit_manager_blocks)
+            QTimer.singleShot(120, self._fit_window_for_manager)
+        else:
+            QTimer.singleShot(0, self._reset_window_size)
+
+    def _min_window_width(self):
+        """Ширина окна = правый край вкладки «Заливка» + небольшой отступ."""
+        bar = self.tabs.tabBar()
+        # Последняя вкладка — «Заливка»
+        idx = self.tabs.count() - 1
+        last = bar.tabRect(idx)
+        return max(720, last.right() + 36)
+
+    def _reset_window_size(self):
+        """Компактный размер окна для обычных вкладок."""
+        w = self._min_window_width()
+        h = self.minimumSizeHint().height()
+        h = max(560, min(h if h > 0 else 600, 760))
+        self.resize(w, h)
+
+    def _fit_window_for_manager(self):
+        """Подгоняет высоту окна под содержимое вкладки «Менеджер» (без прокрутки)."""
+        self._refit_manager_blocks()
+        sc = getattr(self, "_manager_scroll", None)
+        content_h = 0
+        if sc is not None and sc.widget() is not None:
+            sc.widget().adjustSize()
+            content_h = sc.widget().sizeHint().height()
+        chrome = self.height() - (sc.height() if sc is not None else self.height())
+        need_h = content_h + chrome + 20
+        w = self._min_window_width()
+        screen = QApplication.primaryScreen().availableGeometry()
+        need_h = min(need_h, screen.height() - 40)
+        # Ширина — как у остальных вкладок (край «Заливка»), но не уже 900
+        w = max(900, w)
+        self.resize(w, max(560, need_h))
+
+    def _manager_tab_index(self):
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).strip().endswith("Менеджер"):
+                return i
+        return 2
+
     def _bold_label(self, text, size=11):
-        lb=QLabel(text); lb.setFont(QFont("Arial",size,QFont.Weight.Bold)); lb.setStyleSheet(f"color:{self.text_color};background:transparent;"); return lb
+        lb=QLabel(text); lb.setFont(QFont("Segoe UI Variable Display",size,QFont.Weight.DemiBold)); lb.setStyleSheet(f"color:{self.text_color};background:transparent;"); return lb
+
+    def _section_title(self, text):
+        lb=QLabel(text)
+        lb.setFont(QFont("Segoe UI Variable Display", 13, QFont.Weight.Bold))
+        lb.setStyleSheet(f"color:{self.theme['text']};background:transparent;letter-spacing:-0.2px;")
+        return lb
+
+    def _field_label(self, text):
+        lb=QLabel(text)
+        lb.setFont(QFont("Segoe UI Variable Text", 11, QFont.Weight.DemiBold))
+        lb.setStyleSheet(f"color:{self.theme['text_muted']};background:transparent;")
+        return lb
+
+    def _card_title(self, text):
+        lb=QLabel(text)
+        lb.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.Bold))
+        lb.setStyleSheet(f"color:{self.theme['text']};background:transparent;padding-bottom:2px;")
+        return lb
 
     def show_whats_new(self):
         WhatsNewDialog(get_app_version(), parent=self).exec()
 
-    def check_update_manual(self):
-        self.label_status.setText("⏳ Проверка обновлений...")
-        QApplication.processEvents()
-        import threading
-        def _do():
-            has_update, latest_ver, dl_url, err = check_for_update()
-            QTimer.singleShot(0, lambda: self._update_check_done(has_update, latest_ver, dl_url, err))
-        threading.Thread(target=_do, daemon=True).start()
+    def open_donate(self):
+        DonateDialog(self).exec()
 
-    def _update_check_done(self, has_update, latest_ver, dl_url, err):
-        if has_update:
-            _mark_update_attempt(latest_ver)
-            UpdateDialog(latest_ver, dl_url).exec()
-        else:
-            msg = err or "Установлена последняя версия."
-            self.label_status.setText(f"📋 {msg}")
-            QMessageBox.information(self, "Проверка обновлений", msg)
+    def open_telegram(self):
+        import webbrowser
+        webbrowser.open("https://t.me/fabilya")
 
     def create_input_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(15); lay.setContentsMargins(20,20,20,20)
-        ff = QFrame()
-        ff.setStyleSheet("QFrame { background: transparent; border: none; }")
-        fl = QVBoxLayout(ff)
-        fl.setContentsMargins(0, 0, 0, 0)
+        w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(12); lay.setContentsMargins(16,14,16,14)
+        cols=QHBoxLayout(); cols.setSpacing(12)
 
-        row = QHBoxLayout()
-        row.setSpacing(10)
+        # ── Левая колонка (компактная) ──
+        left=QVBoxLayout(); left.setSpacing(12)
 
-        # Слева — область для DnD
+        dz_card=QFrame(); dz_card.setObjectName("Card"); dcl=QVBoxLayout(dz_card); dcl.setContentsMargins(14,14,14,14); dcl.setSpacing(8)
         self.drop_area = DropArea()
         self.drop_area.files_dropped.connect(self._handle_dropped_paths)
-        row.addWidget(self.drop_area, stretch=1)
-
-        # Справа — кнопки
-        btns_frame = QFrame()
-        btns_frame.setStyleSheet(
-            "QFrame { background: transparent; border: none; }"
-        )
-        btns_layout = QVBoxLayout(btns_frame)
-        btns_layout.setContentsMargins(0, 0, 0, 0)
-        btns_layout.setSpacing(8)
-
-        btn_folder = QPushButton("📂  Папка")
-        btn_folder.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        btn_folder.setMinimumHeight(48)
-        btn_folder.setMinimumWidth(180)
-        btn_folder.clicked.connect(self.browse_path)
-        btns_layout.addWidget(btn_folder)
-
-        btn_file = QPushButton("📄  Файл")
-        btn_file.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        btn_file.setMinimumHeight(48)
-        btn_file.setMinimumWidth(180)
-        btn_file.clicked.connect(self.browse_file)
-        btns_layout.addWidget(btn_file)
-
-        row.addWidget(btns_frame, stretch=0)
-        fl.addLayout(row)
+        self.drop_area.clicked.connect(self.browse_input)
+        dcl.addWidget(self.drop_area)
+        left.addWidget(dz_card)
 
         # Сохраняем label_path как ссылку на title — чтобы не ломать остальной код
         self.label_path = self.drop_area.title_label
-        lay.addWidget(ff)
-        cf=QFrame(); cl=QVBoxLayout(cf); cl.addWidget(self._bold_label("🎨 Цветность:"))
-        cr=QHBoxLayout(); self.rb_color_auto=QRadioButton("По файлу"); self.rb_color_bw=QRadioButton("Ч/б"); self.rb_color_auto.setChecked(True)
+
+        cf=QFrame(); cf.setObjectName("Card")
+        cl=QVBoxLayout(cf); cl.setContentsMargins(16,14,16,14); cl.setSpacing(10)
+        cl.addWidget(self._section_title("🎨 Цветность"))
+        # Скрытые радио хранят состояние (логика ниже не меняется), видимый UI — сегменты.
+        self.rb_color_auto=QRadioButton("По файлу"); self.rb_color_bw=QRadioButton("Ч/б"); self.rb_color_auto.setChecked(True)
         self.color_mode_group=QButtonGroup(self); self.color_mode_group.addButton(self.rb_color_auto); self.color_mode_group.addButton(self.rb_color_bw)
-        cr.addWidget(self.rb_color_auto); cr.addWidget(self.rb_color_bw); cr.addStretch(); cl.addLayout(cr)
-        self.cb_count_fill = QCheckBox("Учитывать заливку цветом")
-        self.cb_count_fill.setChecked(False)
-        self.cb_count_fill.setStyleSheet("color:#333;background:transparent;")
-        cl.addWidget(self.cb_count_fill)
-        h=QLabel(
-            "«По файлу» — анализ цвета каждой страницы.  «Ч/б» — всё считается чёрно-белым.  "
-            "Заливка — если цвет занимает более 50% площади листа."
+        self.rb_color_auto.hide(); self.rb_color_bw.hide()
+        self.color_segmented = SegmentedControl(["По файлу", "Ч/б"])
+        self.color_segmented._on_change = lambda i: (
+            self.rb_color_auto.setChecked(i == 0) if i == 0 else self.rb_color_bw.setChecked(True)
         )
-        h.setStyleSheet("color:#666;font-size:10px;background:transparent;"); h.setWordWrap(True); cl.addWidget(h)
+        cl.addWidget(self.color_segmented)
+        self.cb_count_fill = SwitchCheckBox("Учитывать заливку цветом")
+        self.cb_count_fill.setChecked(False)
+        self.cb_count_fill.setStyleSheet(f"color:{self.text_color};background:transparent;font-size:13px;")
+        cl.addWidget(self.cb_count_fill)
         self.rb_color_auto.toggled.connect(self._update_fill_checkbox)
         self.rb_color_bw.toggled.connect(self._update_fill_checkbox)
         self._update_fill_checkbox()
-        lay.addWidget(cf)
-        pf=QFrame(); pl=QVBoxLayout(pf); pl.addWidget(self._bold_label("⚙️ Параметры:"))
-        r2=QHBoxLayout(); lbl_copies=QLabel("Количество экземпляров:"); lbl_copies.setStyleSheet(f"color:{self.text_color};background:transparent;"); r2.addWidget(lbl_copies)
-        self.spinbox_copies=NoScrollSpinBox(); self.spinbox_copies.setMinimum(1); self.spinbox_copies.setMaximum(100); self.spinbox_copies.setValue(1); self.spinbox_copies.setFixedWidth(90)
-        self.spinbox_copies.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+        left.addWidget(cf)
+
+        pf=QFrame(); pf.setObjectName("Card")
+        pl=QVBoxLayout(pf); pl.setContentsMargins(16,14,16,14); pl.setSpacing(10)
+        pl.addWidget(self._section_title("⚙️ Параметры"))
+        r2=QHBoxLayout(); r2.setSpacing(10)
+        lbl_copies=QLabel("Количество экземпляров:"); lbl_copies.setStyleSheet(f"color:{self.theme['text_muted']};background:transparent;font-size:13px;font-weight:600;"); r2.addWidget(lbl_copies)
+        self.spinbox_copies=CopiesInput(); self.spinbox_copies.setValue(1)
         self.spinbox_copies.valueChanged.connect(self.on_params_changed); r2.addWidget(self.spinbox_copies); r2.addStretch(); pl.addLayout(r2)
-        pl.addWidget(self._bold_label("📌 Брошюровка на пластиковую пружину:",10))
-        br=QHBoxLayout(); self.rb_binding_none=QRadioButton("Не нужна"); self.rb_binding_a4=QRadioButton("A4"); self.rb_binding_a3=QRadioButton("A3"); self.rb_binding_none.setChecked(True)
+
+        pl.addWidget(self._field_label("📌 Брошюровка на пластиковую пружину:"))
+        self.rb_binding_none=QRadioButton("Не нужна"); self.rb_binding_a4=QRadioButton("A4"); self.rb_binding_a3=QRadioButton("A3"); self.rb_binding_none.setChecked(True)
         self.binding_group=QButtonGroup(self)
-        for rb in (self.rb_binding_none,self.rb_binding_a4,self.rb_binding_a3): self.binding_group.addButton(rb); br.addWidget(rb)
-        br.addStretch(); pl.addLayout(br)
-        pl.addWidget(self._bold_label("📋 Фальцовка:",10))
-        fr=QHBoxLayout(); self.rb_folding_none=QRadioButton("Не нужна"); self.rb_folding_a4=QRadioButton("Под A4"); self.rb_folding_a3=QRadioButton("Под A3"); self.rb_folding_none.setChecked(True)
+        for rb in (self.rb_binding_none,self.rb_binding_a4,self.rb_binding_a3): self.binding_group.addButton(rb); rb.hide()
+        self.binding_segmented = SegmentedControl(["Не нужна", "A4", "A3"])
+        self.binding_segmented._on_change = self._set_binding_index
+        pl.addWidget(self.binding_segmented)
+
+        pl.addWidget(self._field_label("📋 Фальцовка:"))
+        self.rb_folding_none=QRadioButton("Не нужна"); self.rb_folding_a4=QRadioButton("Под A4"); self.rb_folding_a3=QRadioButton("Под A3"); self.rb_folding_none.setChecked(True)
         self.folding_group=QButtonGroup(self)
-        for rb in (self.rb_folding_none,self.rb_folding_a4,self.rb_folding_a3): self.folding_group.addButton(rb); fr.addWidget(rb)
-        fr.addStretch(); pl.addLayout(fr)
-        self.binding_group.buttonClicked.connect(self.on_binding_changed); self.folding_group.buttonClicked.connect(self.on_params_changed); lay.addWidget(pf)
-        pgf=QFrame(); pgl=QVBoxLayout(pgf); pgl.addWidget(self._bold_label("Статус анализа:",10))
-        self.label_status=QLabel("Готово"); self.label_status.setStyleSheet(f"color:{self.text_color};background:transparent;"); pgl.addWidget(self.label_status)
-        self.progress_bar=QProgressBar(); self.progress_bar.setValue(0); pgl.addWidget(self.progress_bar); lay.addWidget(pgf)
-        brow=QHBoxLayout()
-        self.btn_analyze=QPushButton("▶️ НАЧАТЬ АНАЛИЗ"); self.btn_analyze.setFont(QFont("Arial",12,QFont.Weight.Bold)); self.btn_analyze.setMinimumHeight(50); self.btn_analyze.clicked.connect(self.start_analysis); brow.addWidget(self.btn_analyze,stretch=3)
-        self.btn_stop=QPushButton("⏹ СТОП"); self.btn_stop.setFont(QFont("Arial",12,QFont.Weight.Bold)); self.btn_stop.setMinimumHeight(50)
-        self.btn_stop.setStyleSheet(f"QPushButton{{background-color:{self.danger_color};color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;}}QPushButton:hover{{background-color:#a00;}}QPushButton:disabled{{background-color:#ddd;color:#999;}}")
-        self.btn_stop.clicked.connect(self.stop_analysis); self.btn_stop.setEnabled(False); brow.addWidget(self.btn_stop,stretch=1); lay.addLayout(brow); lay.addStretch()
-        links_layout=QHBoxLayout(); links_layout.setContentsMargins(0,5,0,0); links_layout.setSpacing(10)
-        lbl_thx=QLabel('⭐ <a href="https://kopirkaru.bitrix24.ru/company/personal/user/423876/" style="color:#0066cc;text-decoration:none;">Оставить благодарность в Bitrix</a>')
-        lbl_thx.setFont(QFont("Arial",9)); lbl_thx.setStyleSheet("background:transparent;border:none;color:#333;"); lbl_thx.setOpenExternalLinks(True); links_layout.addWidget(lbl_thx); links_layout.addStretch()
-        btn_whats_new=QPushButton(f"🎉 Что нового (v{get_app_version()})"); btn_whats_new.setFont(QFont("Arial",9)); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_whats_new.setStyleSheet("QPushButton{background-color:transparent;color:#0066cc;border:1px solid #0066cc;border-radius:4px;padding:4px 10px;font-weight:normal;}QPushButton:hover{background-color:#0066cc;color:white;}")
-        btn_whats_new.clicked.connect(self.show_whats_new); links_layout.addWidget(btn_whats_new)
-        btn_check_upd=QPushButton("🔄 Проверить обновления"); btn_check_upd.setFont(QFont("Arial",9)); btn_check_upd.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_check_upd.setStyleSheet("QPushButton{background-color:transparent;color:#0066cc;border:1px solid #0066cc;border-radius:4px;padding:4px 10px;font-weight:normal;}QPushButton:hover{background-color:#0066cc;color:white;}")
-        btn_check_upd.clicked.connect(self.check_update_manual); links_layout.addWidget(btn_check_upd); links_layout.addStretch()
-        lbl_bug=QLabel('🐛 Сообщить об ошибке: ilya.fabiyanskiy@yandex.ru'); lbl_bug.setFont(QFont("Arial",9))
-        lbl_bug.setStyleSheet("background:transparent;border:none;color:#666;"); lbl_bug.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse); links_layout.addWidget(lbl_bug)
-        lay.addLayout(links_layout); return w
+        for rb in (self.rb_folding_none,self.rb_folding_a4,self.rb_folding_a3): self.folding_group.addButton(rb); rb.hide()
+        self.folding_segmented = SegmentedControl(["Не нужна", "Под A4", "Под A3"])
+        self.folding_segmented._on_change = self._set_folding_index
+        pl.addWidget(self.folding_segmented)
+
+        self.binding_group.buttonClicked.connect(self.on_binding_changed); self.folding_group.buttonClicked.connect(self.on_params_changed)
+        left.addWidget(pf)
+        left.addStretch()
+        cols.addLayout(left, stretch=5)
+
+        # ── Правая колонка: статус + анализ + ссылки ──
+        right=QVBoxLayout(); right.setSpacing(12)
+
+        sc_card=QFrame(); sc_card.setObjectName("Card")
+        scl=QVBoxLayout(sc_card); scl.setContentsMargins(16,14,16,14); scl.setSpacing(10)
+        scl.addWidget(self._section_title("⚡ Статус анализа"))
+        self.label_status=QLabel("Готово"); self.label_status.setStyleSheet(f"color:{self.text_color};background:transparent;font-size:15px;font-weight:600;"); scl.addWidget(self.label_status)
+        scl_note=QLabel("Расчёт выполняется локально на вашем компьютере — файлы никуда не отправляются.")
+        scl_note.setStyleSheet(f"color:{self.theme['text_muted']};font-size:11px;background:transparent;"); scl_note.setWordWrap(True); scl.addWidget(scl_note)
+        self.progress_bar=QProgressBar(); self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar{{border:none;border-radius:5px;text-align:center;height:10px;"
+            f"color:transparent;background-color:{THEME['surface_high']};}}"
+            f"QProgressBar::chunk{{border-radius:5px;"
+            f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"stop:0 #0A84FF, stop:1 #00C2FF);}}"
+        )
+        scl.addWidget(self.progress_bar)
+        arow=QHBoxLayout(); arow.setSpacing(10)
+        self.btn_analyze=QPushButton("▶️  Начать анализ"); self.btn_analyze.setFont(QFont("Segoe UI Variable Display",13,QFont.Weight.Bold)); self.btn_analyze.setMinimumHeight(48)
+        self.btn_analyze.setStyleSheet(_qss_button("filled"))
+        self.btn_analyze.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_analyze.clicked.connect(self.on_primary_action); arow.addWidget(self.btn_analyze, stretch=1)
+        self.btn_stop=QPushButton("⏹  Стоп"); self.btn_stop.setFont(QFont("Segoe UI Variable Display",12,QFont.Weight.DemiBold)); self.btn_stop.setMinimumHeight(48)
+        self.btn_stop.setStyleSheet(_qss_button("danger")); self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stop.clicked.connect(self.stop_analysis); self.btn_stop.setEnabled(False); arow.addWidget(self.btn_stop, stretch=0)
+        scl.addLayout(arow)
+        right.addWidget(sc_card)
+
+        lc_card=QFrame(); lc_card.setObjectName("Card")
+        lcl=QVBoxLayout(lc_card); lcl.setContentsMargins(16,14,16,14); lcl.setSpacing(10)
+        btn_donate=QPushButton("❤️  DONATE")
+        btn_donate.setFont(QFont("Segoe UI Variable Display",12,QFont.Weight.Bold)); btn_donate.setMinimumHeight(44)
+        btn_donate.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_donate.setStyleSheet(_qss_button("success"))
+        btn_donate.clicked.connect(self.open_donate)
+        lcl.addWidget(btn_donate)
+
+        # «Нашли ошибку?» и «Что нового» — в одну строку, белые как outlined
+        row_btns=QHBoxLayout(); row_btns.setSpacing(8)
+        btn_bug=QPushButton("  Нашли ошибку?")
+        tg_icon = QIcon(resource_path("assets/telegram.png"))
+        if not tg_icon.isNull():
+            btn_bug.setIcon(tg_icon)
+            btn_bug.setIconSize(QSize(18, 18))
+        btn_bug.setFont(QFont("Segoe UI Variable Display",10,QFont.Weight.DemiBold)); btn_bug.setMinimumHeight(40)
+        btn_bug.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_bug.setStyleSheet(_qss_button("outlined"))
+        btn_bug.setToolTip("Открыть чат в Telegram")
+        btn_bug.clicked.connect(self.open_telegram)
+        row_btns.addWidget(btn_bug, stretch=1)
+
+        btn_whats_new=QPushButton(f"Что нового (v{get_app_version()})"); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_whats_new.setFont(QFont("Segoe UI Variable Display",10,QFont.Weight.DemiBold))
+        btn_whats_new.setMinimumHeight(40)
+        btn_whats_new.setStyleSheet(_qss_button("outlined"))
+        btn_whats_new.clicked.connect(self.show_whats_new)
+        row_btns.addWidget(btn_whats_new, stretch=1)
+        lcl.addLayout(row_btns)
+        right.addWidget(lc_card)
+        right.addStretch()
+        cols.addLayout(right, stretch=4)
+
+        lay.addLayout(cols); return w
+
+    def _set_binding_index(self, i):
+        btn = (self.rb_binding_none, self.rb_binding_a4, self.rb_binding_a3)[i]
+        if not btn.isEnabled():
+            # откатываем визуальный сегмент назад
+            cur = 2
+            if self.rb_binding_none.isChecked(): cur = 0
+            elif self.rb_binding_a4.isChecked(): cur = 1
+            self.binding_segmented.setCurrentIndex(cur)
+            return
+        btn.setChecked(True)
+        self.on_binding_changed()
+
+    def _set_folding_index(self, i):
+        btn = (self.rb_folding_none, self.rb_folding_a4, self.rb_folding_a3)[i]
+        if not btn.isEnabled():
+            cur = 2
+            if self.rb_folding_none.isChecked(): cur = 0
+            elif self.rb_folding_a4.isChecked(): cur = 1
+            self.folding_segmented.setCurrentIndex(cur)
+            return
+        btn.setChecked(True)
+        self.on_params_changed()
 
     def on_binding_changed(self):
         if self.rb_binding_a4.isChecked():
             self.rb_folding_a4.setChecked(True)
+            self.folding_segmented.setCurrentIndex(1)
             for rb in (self.rb_folding_none,self.rb_folding_a3,self.rb_folding_a4): rb.setEnabled(False)
+            self.folding_segmented.setEnabled(False)
         elif self.rb_binding_a3.isChecked():
             self.rb_folding_a3.setChecked(True)
+            self.folding_segmented.setCurrentIndex(2)
             for rb in (self.rb_folding_none,self.rb_folding_a4,self.rb_folding_a3): rb.setEnabled(False)
+            self.folding_segmented.setEnabled(False)
         else:
             for rb in (self.rb_folding_none,self.rb_folding_a4,self.rb_folding_a3): rb.setEnabled(True)
+            self.folding_segmented.setEnabled(True)
         self.on_params_changed()
 
+    def _tab_desc(self, text):
+        lb=QLabel(text)
+        lb.setStyleSheet(f"color:{self.theme['text_muted']};font-size:12px;background:transparent;")
+        lb.setWordWrap(True)
+        return lb
+
     def create_details_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
-        lay.addWidget(self._bold_label("📊 Детализация по файлам (1 экз., с номерами страниц):"))
-        self.text_details=QTextEdit(); self.text_details.setReadOnly(True); self.text_details.setFont(QFont("Consolas",9))
-        self.text_details.setStyleSheet(f"QTextEdit{{background-color:white;color:{self.text_color};border:1px solid #e0e0e0;border-radius:4px;}}"); lay.addWidget(self.text_details)
-        btn_save=QPushButton("💾 Сохранить в TXT (Для производства)"); btn_save.setMinimumHeight(40); btn_save.clicked.connect(self.save_details_txt); lay.addWidget(btn_save); return w
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,16,20,16); lay.setSpacing(10)
+        head=QVBoxLayout(); head.setSpacing(4)
+        head.addWidget(self._section_title("📊 Детализация"))
+        head.addWidget(self._tab_desc(
+            "Полная подробная информация по каждому файлу: 1 экземпляр, с номерами страниц "
+            "и пометками конвертаций и заливки."
+        ))
+        lay.addLayout(head)
+        self.text_details=QTextEdit(); self.text_details.setReadOnly(True); self.text_details.setFont(QFont("Cascadia Mono",9))
+        self.text_details.setStyleSheet(f"QTextEdit{{background-color:{self.theme['surface']};color:{self.text_color};border:1px solid {self.theme['divider']};border-radius:{self.theme['r_lg']};padding:14px;}}"); lay.addWidget(self.text_details)
+        btn_save=QPushButton("💾  Сохранить в TXT (для производства)"); btn_save.setMinimumHeight(46); btn_save.setStyleSheet(_qss_button("filled")); btn_save.setCursor(Qt.CursorShape.PointingHandCursor); btn_save.clicked.connect(self.save_details_txt); lay.addWidget(btn_save); return w
 
     def create_manager_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(15)
-        scroll=QScrollArea(); scroll.setWidgetResizable(True); sc=QWidget(); sl=QVBoxLayout(sc); sl.setSpacing(15)
-        def make_block(title,attr,minh=80):
-            frame=QFrame(); fl_=QVBoxLayout(frame); fl_.setContentsMargins(10,10,10,10); fl_.addWidget(self._bold_label(title))
-            te=QTextEdit(); te.setReadOnly(True); te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            te.setSizePolicy(te.sizePolicy().horizontalPolicy(),QSizePolicy.Policy.Fixed); te.setMinimumHeight(minh)
-            te.setStyleSheet(f"QTextEdit{{background-color:white;color:{self.text_color};border:1px solid #e0e0e0;border-radius:4px;}}"); fl_.addWidget(te); setattr(self,attr,te); return frame
-        sl.addWidget(make_block("🖨️ Печать (с конвертацией, с учётом экземпляров):","text_printing",120))
-        sl.addWidget(make_block("🌀 Рулонная печать:","text_roll",80))
-        sl.addWidget(make_block("✂️ Резка:","text_cutting",80))
-        sl.addWidget(make_block("📋 Фальцовка:","text_folding",120))
-        sl.addWidget(make_block("📌 Брошюровка:","text_binding",80))
-        tf=QFrame(); tl=QVBoxLayout(tf)
-        self.label_total=QLabel("⚖️ Вес: —"); self.label_total.setFont(QFont("Arial",14,QFont.Weight.Bold))
-        self.label_total.setStyleSheet(f"color:{self.primary_color};background:transparent;"); tl.addWidget(self.label_total); sl.addWidget(tf); sl.addStretch()
-        scroll.setWidget(sc); lay.addWidget(scroll); return w
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,16,20,16); lay.setSpacing(10)
+        ear=QVBoxLayout(); ear.setSpacing(4)
+        ear.addWidget(self._section_title("👔 Менеджер"))
+        ear.addWidget(self._tab_desc(
+            "Точные значения для ввода в CRM KOPIRKA."
+        ))
+        lay.addLayout(ear)
+
+        # Единая прокрутка всей вкладки: блоки показывают всю информацию целиком,
+        # без внутренних скроллов, которые скрывают часть данных.
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        content=QWidget(); cl=QVBoxLayout(content); cl.setContentsMargins(0,0,6,0); cl.setSpacing(14)
+
+        sl=QHBoxLayout(); sl.setSpacing(16); sl.setContentsMargins(0,0,0,0)
+
+        def make_block(title,attr,weight=1):
+            frame=QFrame(); frame.setObjectName("Card")
+            # Высота всегда по содержимому; не сжимается — текст не обрезается.
+            frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            fl_=QVBoxLayout(frame); fl_.setContentsMargins(18,16,18,16); fl_.setSpacing(8)
+            title_lbl = self._card_title(title)
+            fl_.addWidget(title_lbl)
+            te=QTextEdit(); te.setReadOnly(True)
+            # Внутренний скролл выключен: блок всегда показывает весь текст.
+            te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            te.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            te.setStyleSheet(
+                f"QTextEdit{{background-color:{self.theme['surface_alt']};color:{self.text_color};"
+                f"border:1px solid {self.theme['divider']};border-radius:{self.theme['r_md']};"
+                f"padding:12px;font-family:{self.theme['mono']};font-size:12px;}}"
+            )
+            fl_.addWidget(te, stretch=0); setattr(self,attr,te)
+            setattr(self, attr + "_frame", frame)
+            setattr(self, attr + "_weight", weight)
+
+            def refit(*_a, _te=te, _frame=frame):
+                _te.document().setTextWidth(max(40, _te.viewport().width()))
+                doc_h = _te.document().size().height()
+                m = _te.contentsMargins()
+                extra = m.top() + m.bottom() + 2 * _te.frameWidth() + 4
+                h = int(doc_h) + extra
+                _te.setFixedHeight(max(48, h))
+                _frame.setMinimumHeight(
+                    max(48, h) + title_lbl.sizeHint().height() + 34
+                )
+            te._refit = refit
+            te.document().documentLayout().documentSizeChanged.connect(refit)
+            refit()
+            return frame, weight
+
+        left=QVBoxLayout(); left.setSpacing(14)
+        for title, attr, wt in [
+            ("🖨️ Печать (с конвертацией, с учётом экземпляров)", "text_printing", 5),
+            ("🌀 Рулонная печать", "text_roll", 3),
+            ("📋 Фальцовка", "text_folding", 4),
+        ]:
+            frame, weight = make_block(title, attr, wt); left.addWidget(frame, stretch=0)
+        left.addStretch(1)
+        self._manager_left_layout = left
+        sl.addLayout(left, stretch=6)
+
+        right=QVBoxLayout(); right.setSpacing(14)
+        r1,_ = make_block("✂️ Резка","text_cutting"); right.addWidget(r1, stretch=0)
+        r2,_ = make_block("📌 Брошюровка","text_binding"); right.addWidget(r2, stretch=0)
+        right.addStretch(1)
+        self._manager_right_layout = right
+        sl.addLayout(right, stretch=6)
+        cl.addLayout(sl)
+
+        scroll.setWidget(content)
+        lay.addWidget(scroll, stretch=1)
+        # При изменении размеров вкладки пересчитываем высоты блоков
+        self._manager_scroll = scroll
+
+        # «Итоговый вес» — компактная карточка-футер на всю ширину.
+        tf=QFrame(); tf.setObjectName("Card")
+        tf.setStyleSheet(
+            f"QFrame#Card{{background:{self.theme['surface']};border:1px solid {self.theme['divider']};"
+            f"border-radius:{self.theme['r_lg']};}}"
+        )
+        tf.setFixedHeight(76)
+        tl=QHBoxLayout(tf); tl.setContentsMargins(20,12,20,12); tl.setSpacing(12)
+        wt=QLabel("⚖️ Итоговый вес"); wt.setStyleSheet(f"color:{self.theme['text_muted']};background:transparent;font-size:13px;font-weight:600;")
+        tl.addWidget(wt); tl.addStretch()
+        self.label_total=QLabel("—"); self.label_total.setFont(QFont("Segoe UI Variable Display",24,QFont.Weight.Bold))
+        self.label_total.setStyleSheet(f"color:{self.primary_color};background:transparent;"); tl.addWidget(self.label_total)
+        self._weight_frame = tf
+        lay.addWidget(tf, stretch=0)
+        return w
+
+    def _set_block_visible(self, attr, visible):
+        """Скрывает/показывает раздел вкладки «Менеджер»."""
+        frame = getattr(self, attr + "_frame", None)
+        if frame is not None:
+            frame.setVisible(visible)
 
     def create_report_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
-        lay.addWidget(self._bold_label("📄 Полный отчет:"))
-        self.text_report=QTextEdit(); self.text_report.setReadOnly(True); self.text_report.setFont(QFont("Courier",9))
-        self.text_report.setStyleSheet(f"QTextEdit{{background-color:white;color:{self.text_color};border:1px solid #e0e0e0;border-radius:4px;}}"); lay.addWidget(self.text_report)
-        self.btn_copy_report=QPushButton("📋 Копировать в буфер обмена")
-        self.btn_copy_report.setMinimumHeight(40)
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,16,20,16); lay.setSpacing(10)
+        head=QVBoxLayout(); head.setSpacing(4)
+        head.addWidget(self._section_title("📄 Клиент"))
+        head.addWidget(self._tab_desc(
+            "Информация для клиента без сложных формул пересчёта форматов. "
+            "Отчёт уже сформирован с учётом количества экземпляров."
+        ))
+        lay.addLayout(head)
+        self.text_report=QTextEdit(); self.text_report.setReadOnly(True); self.text_report.setFont(QFont("Cascadia Mono",9))
+        self.text_report.setStyleSheet(f"QTextEdit{{background-color:{self.theme['surface']};color:{self.text_color};border:1px solid {self.theme['divider']};border-radius:{self.theme['r_lg']};padding:14px;}}"); lay.addWidget(self.text_report)
+        self.btn_copy_report=QPushButton("📋  Копировать в буфер обмена")
+        self.btn_copy_report.setMinimumHeight(46); self.btn_copy_report.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_copy_report.clicked.connect(self.copy_report)
-        self._copy_btn_style=(
-            "QPushButton{background-color:#0066cc;color:white;border:none;"
-            "padding:8px 16px;border-radius:4px;font-weight:bold;}"
-            "QPushButton:hover{background-color:#0052a3;}"
-        )
+        self._copy_btn_style=_qss_button("filled")
         self.btn_copy_report.setStyleSheet(self._copy_btn_style)
-        lay.addWidget(self.btn_copy_report); return w
+        lay.addWidget(self.btn_copy_report)
+        btn_pdf=QPushButton("📄  Сгенерировать PDF")
+        btn_pdf.setMinimumHeight(46); btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_pdf.setStyleSheet(_qss_button("success"))
+        btn_pdf.clicked.connect(self.generate_client_pdf)
+        lay.addWidget(btn_pdf); return w
 
     def create_history_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
-        header=QHBoxLayout(); header.addWidget(self._bold_label("📚 История расчётов:")); header.addStretch()
-        btn_refresh=QPushButton("🔄 Обновить"); btn_refresh.clicked.connect(self.refresh_history); header.addWidget(btn_refresh); lay.addLayout(header)
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,16,20,16); lay.setSpacing(10)
+        header=QHBoxLayout(); header.addWidget(self._section_title("📚 История")); header.addStretch()
+        btn_refresh=QPushButton("🔄  Обновить"); btn_refresh.setStyleSheet(_qss_button("tonal")); btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor); btn_refresh.clicked.connect(self.refresh_history); header.addWidget(btn_refresh); lay.addLayout(header)
         hint=QLabel("💡 Расчёты сохраняются автоматически. Двойной клик по строке — загрузить расчёт. Клик по заголовку столбца — сортировка.")
-        hint.setStyleSheet("color:#666;font-size:10px;padding:4px;background:transparent;"); hint.setWordWrap(True); lay.addWidget(hint)
+        hint.setStyleSheet(f"color:{self.theme['text_muted']};font-size:12px;padding:2px;background:transparent;"); hint.setWordWrap(True); lay.addWidget(hint)
         self.history_table=QTableWidget(); self.history_table.setColumnCount(4); self.history_table.setHorizontalHeaderLabels(["Дата и время","Название","Файлов","Страниц"])
         self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers); self.history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.history_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection); self.history_table.cellDoubleClicked.connect(self.load_history_item)
-        self.history_table.setAlternatingRowColors(True); self.history_table.setStyleSheet(f"QTableWidget{{alternate-background-color:#f8f9fa;color:{self.text_color};background-color:white;}}")
+        self.history_table.setAlternatingRowColors(True)
         self.history_table.verticalHeader().setVisible(False); self.history_table.setSortingEnabled(True); lay.addWidget(self.history_table)
-        btns=QHBoxLayout()
-        btn_load=QPushButton("📂 Загрузить выбранный"); btn_load.setMinimumHeight(40); btn_load.clicked.connect(self.load_selected_history); btns.addWidget(btn_load)
-        btn_delete=QPushButton("🗑 Удалить выбранный"); btn_delete.setMinimumHeight(40)
-        btn_delete.setStyleSheet("QPushButton{background-color:#d33;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;}QPushButton:hover{background-color:#a00;}")
+        btns=QHBoxLayout(); btns.setSpacing(10)
+        btn_load=QPushButton("📂  Загрузить выбранный"); btn_load.setMinimumHeight(44); btn_load.setStyleSheet(_qss_button("filled")); btn_load.setCursor(Qt.CursorShape.PointingHandCursor); btn_load.clicked.connect(self.load_selected_history); btns.addWidget(btn_load)
+        btn_delete=QPushButton("🗑  Удалить выбранный"); btn_delete.setMinimumHeight(44)
+        btn_delete.setStyleSheet(_qss_button("danger")); btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_delete.clicked.connect(self.delete_selected_history); btns.addWidget(btn_delete); btns.addStretch()
-        btn_folder=QPushButton("📁 Открыть папку истории"); btn_folder.setMinimumHeight(40)
-        btn_folder.setStyleSheet("QPushButton{background-color:#888;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;}QPushButton:hover{background-color:#666;}")
+        btn_folder=QPushButton("📁  Открыть папку истории"); btn_folder.setMinimumHeight(44)
+        btn_folder.setStyleSheet(_qss_button("neutral")); btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_folder.clicked.connect(self.open_history_folder); btns.addWidget(btn_folder); lay.addLayout(btns); return w
 
     def _fill_pct_color(self, pct):
-        if pct<25: return QColor("#2a7a2a")
-        if pct<50: return QColor("#b8860b")
-        if pct<75: return QColor("#cc6600")
-        return QColor("#d33")
+        if pct<25: return QColor(THEME["success"])
+        if pct<50: return QColor("#84CC16")
+        if pct<75: return QColor(THEME["warning"])
+        return QColor(THEME["danger"])
 
     def create_fill_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(10)
-        header=QHBoxLayout(); header.addWidget(self._bold_label("🎨 Процент заливки страниц:")); header.addStretch()
-        btn_expand=QPushButton("▶ Развернуть все"); btn_expand.setFixedHeight(28)
+        w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,20,20,20); lay.setSpacing(12)
+        header=QHBoxLayout(); header.addWidget(self._section_title("🎨 Заливка")); header.addStretch()
+        btn_expand=QPushButton("▶  Развернуть все"); btn_expand.setFixedHeight(38); btn_expand.setStyleSheet(_qss_button("outlined")); btn_expand.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_expand.clicked.connect(lambda: self.fill_tree.expandAll())
         header.addWidget(btn_expand)
-        btn_collapse=QPushButton("◀ Свернуть все"); btn_collapse.setFixedHeight(28)
+        btn_collapse=QPushButton("◀  Свернуть все"); btn_collapse.setFixedHeight(38); btn_collapse.setStyleSheet(_qss_button("outlined")); btn_collapse.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_collapse.clicked.connect(lambda: self.fill_tree.collapseAll())
         header.addWidget(btn_collapse)
         lay.addLayout(header)
-        hint=QLabel("💡 Процент цветной заливки для каждой страницы. Данные собираются только при включённой галочке «Учитывать заливку цветом» в параметрах.")
-        hint.setStyleSheet("color:#666;font-size:10px;padding:4px;background:transparent;"); hint.setWordWrap(True); lay.addWidget(hint)
+        hint=QLabel("💡 Заливка — доля не-белых пикселей на странице. Страницы с заливкой более 50% помечаются в детализации как «[заливка]». Данные собираются при включённой галочке «Учитывать заливку цветом».")
+        hint.setStyleSheet(f"color:{self.theme['text_muted']};font-size:12px;padding:2px;background:transparent;"); hint.setWordWrap(True); lay.addWidget(hint)
         self.fill_tree=QTreeWidget()
         self.fill_tree.setColumnCount(4)
         self.fill_tree.setHeaderLabels(["Файл / Страница","Формат","Цветность","Заливка %"])
         self.fill_tree.setAlternatingRowColors(True)
-        self.fill_tree.setStyleSheet(f"QTreeWidget{{alternate-background-color:#f8f9fa;color:{self.text_color};background-color:white;}}")
         self.fill_tree.setRootIsDecorated(True)
         self.fill_tree.setAnimated(True)
         self.fill_tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
@@ -2281,11 +3917,11 @@ class PrintingCalculator(QMainWindow):
                 val=fill_pcts.get(pn,(0.0,0.0))
                 color_pct,ink_pct=val if isinstance(val,tuple) else (float(val),float(val))
                 fmt,kind=page_info.get(pn,("?","ч/б"))
-                pct=color_pct if kind=="цвет" else ink_pct
+                pct=ink_pct
                 total_pct+=pct
                 child=QTreeWidgetItem([f"Стр. {pn}",fmt,kind,f"{pct}%"])
                 if kind=="цвет":
-                    child.setForeground(2,QColor("#d33"))
+                    child.setForeground(2,QColor(THEME["danger"]))
                 child.setForeground(3,self._fill_pct_color(pct))
                 root.addChild(child)
             avg=total_pct/total if total>0 else 0.0
@@ -2300,22 +3936,11 @@ class PrintingCalculator(QMainWindow):
             for col in [1,2,3]:
                 header.setSectionResizeMode(col,QHeaderView.ResizeMode.ResizeToContents)
 
-    def browse_path(self):
-        p = QFileDialog.getExistingDirectory(self, "Выберите папку с PDF файлами")
-        if p:
-            self.selected_path = p
-            self._dropped_pdfs = None
-            self.drop_area.set_selected_path(p)
-
-    def browse_file(self):
-        p, _ = QFileDialog.getOpenFileName(
-            self, "Выберите PDF файл", "",
-            "PDF (*.pdf);;Все файлы (*.*)",
-        )
-        if p:
-            self.selected_path = p
-            self._dropped_pdfs = None
-            self.drop_area.set_selected_path(p)
+    def browse_input(self):
+        """Открывает проводник, где можно выбрать папку или один/несколько PDF."""
+        dlg = PathPickerDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._handle_dropped_paths(dlg.selected_paths())
 
     def _update_fill_checkbox(self):
         auto = self.rb_color_auto.isChecked()
@@ -2326,6 +3951,23 @@ class PrintingCalculator(QMainWindow):
     def on_params_changed(self):
         self.copies=self.spinbox_copies.value(); self.need_folding_a4=self.rb_folding_a4.isChecked(); self.need_folding_a3=self.rb_folding_a3.isChecked()
         self.need_binding_a4=self.rb_binding_a4.isChecked(); self.need_binding_a3=self.rb_binding_a3.isChecked(); self.calculate_and_display()
+
+    def on_primary_action(self):
+        """Одна кнопка: Начать анализ → Пауза → Продолжить."""
+        running = self.thread is not None and self.thread.isRunning()
+        if not running:
+            self.start_analysis()
+            return
+        if self.thread.is_paused():
+            self.thread.request_resume()
+            self.btn_analyze.setText("⏸  Пауза")
+            self.btn_analyze.setStyleSheet(_qss_button("warning"))
+            self.label_status.setText("⏳ Анализ продолжен...")
+        else:
+            self.thread.request_pause()
+            self.btn_analyze.setText("▶️  Продолжить")
+            self.btn_analyze.setStyleSheet(_qss_button("success"))
+            self.label_status.setText("⏸ Пауза")
 
     def start_analysis(self):
         # Приоритет — перетянутые файлы (если есть)
@@ -2353,7 +3995,10 @@ class PrintingCalculator(QMainWindow):
         self.force_bw=self.rb_color_bw.isChecked()
         count_fill = self.cb_count_fill.isChecked() and not self.force_bw
         self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
-        self.label_status.setText("⏳ Идет анализ..."); self.progress_bar.setValue(0); self.btn_analyze.setEnabled(False); self.btn_stop.setEnabled(True)
+        self.label_status.setText("⏳ Идет анализ..."); self.progress_bar.setValue(0)
+        self.btn_analyze.setEnabled(True); self.btn_analyze.setText("⏸  Пауза")
+        self.btn_analyze.setStyleSheet(_qss_button("warning"))
+        self.btn_stop.setEnabled(True)
         self.thread=AnalysisThread(pdfs, force_bw=self.force_bw, count_fill=count_fill)
         self.thread.progress.connect(self.update_progress); self.thread.status.connect(self.update_status)
         self.thread.need_user_input.connect(self.show_unknown_format_dialog); self.thread.finished.connect(self.analysis_finished)
@@ -2361,12 +4006,18 @@ class PrintingCalculator(QMainWindow):
 
     def stop_analysis(self):
         if not self.thread or not self.thread.isRunning(): return
-        self.label_status.setText("⏹ Останавливаю анализ..."); self.btn_stop.setEnabled(False)
+        self.label_status.setText("⏹ Отменяю расчёт..."); self.btn_stop.setEnabled(False)
+        self.btn_analyze.setEnabled(False)
         if self.current_dialog:
             try: self.current_dialog.result_action="skip"; self.current_dialog.result_value=None; self.current_dialog.reject()
             except: pass
             self.current_dialog=None
         self.thread.request_stop()
+
+    def _reset_primary_button(self):
+        self.btn_analyze.setEnabled(True)
+        self.btn_analyze.setText("▶️  Начать анализ")
+        self.btn_analyze.setStyleSheet(_qss_button("filled"))
 
     def show_unknown_format_dialog(self, w, h, color, pages, pdf_path):
         if self.thread and self.thread._stop_requested: self.thread.set_user_response("skip",None); return
@@ -2377,10 +4028,22 @@ class PrintingCalculator(QMainWindow):
     def update_status(self, s): self.label_status.setText(f"⏳ {s}")
 
     def analysis_finished(self, grand, total_source, fpc, fd):
+        stopped = bool(self.thread and self.thread._stop_requested)
+        if stopped:
+            # Стоп = полная отмена расчёта: результаты не применяем и не сохраняем.
+            self.grand={}; self.total_source=0; self.file_page_counts=[]; self.file_details=[]
+            self.text_details.clear(); self.fill_tree.clear(); self.text_report.clear()
+            for a in ("text_printing","text_roll","text_cutting","text_folding","text_binding"):
+                getattr(self, a).clear()
+            self.label_total.setText("—")
+            self._reset_primary_button(); self.btn_stop.setEnabled(False)
+            self.progress_bar.setValue(0)
+            return
         self.grand=grand; self.total_source=total_source; self.file_page_counts=fpc; self.file_details=fd
-        if not self.thread or not self.thread._stop_requested: self.label_status.setText("✅ Анализ завершен"); self.progress_bar.setValue(100)
-        self.btn_analyze.setEnabled(True); self.btn_stop.setEnabled(False); self.display_details(); self.display_fill_pcts(); self.calculate_and_display()
-        if self.grand and not (self.thread and self.thread._stop_requested): self._auto_save_to_history()
+        self.label_status.setText("✅ Анализ завершен"); self.progress_bar.setValue(100)
+        self._reset_primary_button(); self.btn_stop.setEnabled(False)
+        self.display_details(); self.display_fill_pcts(); self.calculate_and_display()
+        if self.grand: self._auto_save_to_history()
 
     def _auto_save_to_history(self):
         if not self.grand: return
@@ -2400,10 +4063,13 @@ class PrintingCalculator(QMainWindow):
         except Exception as e: print(f"Ошибка автосохранения: {e}")
 
     def analysis_stopped(self):
-        self.label_status.setText("⏹ Анализ остановлен пользователем"); self.btn_analyze.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.label_status.setText("⏹ Расчёт отменён")
+        self._reset_primary_button(); self.btn_stop.setEnabled(False)
+        self.progress_bar.setValue(0)
 
     def analysis_error(self, error):
-        self.label_status.setText(f"❌ {error}"); self.btn_analyze.setEnabled(True); self.btn_stop.setEnabled(False)
+        self.label_status.setText(f"❌ {error}")
+        self._reset_primary_button(); self.btn_stop.setEnabled(False)
 
     def refresh_history(self):
         try: items=HistoryManager.list_all()
@@ -2444,6 +4110,16 @@ class PrintingCalculator(QMainWindow):
             else: self.rb_binding_none.setChecked(True); self.need_binding_a4=self.need_binding_a3=False
             if self.force_bw: self.rb_color_bw.setChecked(True)
             else: self.rb_color_auto.setChecked(True)
+            # Синхронизируем анимированные сегменты с загруженным расчётом
+            try:
+                self.color_segmented.setCurrentIndex(1 if self.force_bw else 0, animate=False)
+                self.binding_segmented.setCurrentIndex(
+                    1 if binding=='A4' else (2 if binding=='A3' else 0), animate=False)
+                self.folding_segmented.setCurrentIndex(
+                    1 if folding=='A4' else (2 if folding=='A3' else 0), animate=False)
+                self.spinbox_copies.setValue(self.copies)
+            except Exception:
+                pass
             self.cb_count_fill.setChecked(params.get('count_fill', False))
             self._update_fill_checkbox()
             self.display_details(); self.display_fill_pcts(); self.calculate_and_display(); self.tabs.setCurrentIndex(1)
@@ -2521,7 +4197,9 @@ class PrintingCalculator(QMainWindow):
         return out
 
     def _autosize(self, te, minh=80, maxh=2000):
-        d=te.document(); d.setTextWidth(te.viewport().width()); te.setFixedHeight(max(minh,min(int(d.size().height()+10),maxh)))
+        """Подгоняет высоту поля под весь текст (без внутреннего скролла)."""
+        d=te.document(); d.setTextWidth(te.viewport().width())
+        te.setFixedHeight(max(minh, min(int(d.size().height() + 10), maxh)))
 
     def _build_print_summary(self):
         """
@@ -2547,7 +4225,7 @@ class PrintingCalculator(QMainWindow):
                 pages_map = fd.get("pages", {})
                 for key, pages in pages_map.items():
                     fmt, kind = self._pfk(key)
-                    if not fmt or kind != "цвет":
+                    if not fmt:
                         continue
                     cnt = sum(1 for p in pages if p in fill_pages)
                     if cnt > 0:
@@ -2789,29 +4467,52 @@ class PrintingCalculator(QMainWindow):
                     pl.append(line)
                     tpp += t
         self.text_printing.setText("\n".join(pl) if pl else "Нет данных для печати")
+        self._set_block_visible("text_printing", bool(pl))
         rbt = self.grand.get("Рулон ч/б мм", 0) * self.copies + erb
         rct = self.grand.get("Рулон цвет мм", 0) * self.copies + erc
         rl = []
         if rbt>0: rl.append(f"Ч/б — {rbt:.0f} мм ({rbt/1000:.2f} м)")
         if rct>0: rl.append(f"Цвет — {rct:.0f} мм ({rct/1000:.2f} м)")
         self.text_roll.setText("\n".join(rl) if rl else "Рулонная печать не требуется")
+        self._set_block_visible("text_roll", bool(rl))
         cut_lines,cut_total=self._calc_cutting()
         if cut_lines:
             cp=["Форматы, требующие резки:",""]; cp.extend(cut_lines); cp.append(""); cp.append(f"Итого листов на резку: {cut_total}")
             self.text_cutting.setText("\n".join(cp))
         else: self.text_cutting.setText("Резка не требуется")
+        self._set_block_visible("text_cutting", bool(cut_lines))
         ftp,tf,ft=[],0,None; slr,nlr=[],[]
         if self.need_folding_a4: ft="A4"
         elif self.need_folding_a3: ft="A3"
         if ft:
-            slr,nlr,tf=self._calc_folding(ft); ftp.append(f"Фальцовка под {ft}"); ftp.append("")
-            if slr: ftp.append("Стандартные форматы:"); ftp.extend(slr)
-            if nlr:
-                if slr: ftp.append("")
-                ftp.append("Нестандартные/рулонные форматы:"); ftp.extend(nlr)
-                nlt = sum(int(l.rsplit("—", 1)[-1].strip().split()[0]) for l in nlr)
-                ftp.append(f"Итого нестандартных фальцовок: {nlt}")
+            slr,nlr,tf=self._calc_folding(ft)
+            # Для менеджера: нестандартные/рулонные сворачиваем в строку «A0»
+            # (в отчёте для клиента остаётся отдельный блок — он не меняется).
+            nonstd_total = 0
+            for l in nlr:
+                try:
+                    nonstd_total += int(l.rsplit("—", 1)[-1].strip().split()[0])
+                except Exception:
+                    pass
+            mgr_lines = []
+            base_a0 = 0
+            for l in slr:
+                if l.startswith("A0 →"):
+                    try:
+                        base_a0 = int(l.rsplit("—", 1)[-1].strip().split()[0])
+                    except Exception:
+                        base_a0 = 0
+                else:
+                    mgr_lines.append(l)
+            a0_qty = base_a0 + nonstd_total
+            if a0_qty > 0:
+                mgr_lines.append(f"A0 → {ft} — {a0_qty} шт.")
+            ftp.append(f"Фальцовка под {ft}"); ftp.append("")
+            if mgr_lines:
+                ftp.append("Стандартные форматы:")
+                ftp.extend(mgr_lines)
         self.text_folding.setText("\n".join(ftp) if ftp else "Фальцовка не требуется")
+        self._set_block_visible("text_folding", bool(ftp))
 
         blines,tb,bt=[],0,None
         if self.need_binding_a4: bt="A4"; blines,tb=self._calc_binding()
@@ -2819,14 +4520,23 @@ class PrintingCalculator(QMainWindow):
         if bt:
             bp=[f"Брошюровка на пружину {bt}",""]; bp.extend(blines if blines else ["Нет данных"]); self.text_binding.setText("\n".join(bp))
         else: self.text_binding.setText("Брошюровка не требуется")
+        self._set_block_visible("text_binding", bool(bt))
         tw=self._calc_weight(st,rbt,rct,bt,tb)
-        self.label_total.setText(f"⚖️ Вес: {self._fw(tw) if tw>0 else '0.00 кг'}")
-        QTimer.singleShot(0, lambda: self._autosize(self.text_printing,120))
-        QTimer.singleShot(0, lambda: self._autosize(self.text_roll,80))
-        QTimer.singleShot(0, lambda: self._autosize(self.text_cutting,80))
-        QTimer.singleShot(0, lambda: self._autosize(self.text_folding,120))
-        QTimer.singleShot(0, lambda: self._autosize(self.text_binding,80))
+        self.label_total.setText(self._fw(tw) if tw > 0 else "0.00 кг")
+        # Пересчитываем высоту блоков после раскладки (чтобы весь текст был виден)
+        self._refit_manager_blocks()
+        QTimer.singleShot(0, self._refit_manager_blocks)
+        QTimer.singleShot(80, self._refit_manager_blocks)
         self._build_report(ft,slr,nlr,tf,bt,blines,tb,tw)
+
+    def _refit_manager_blocks(self):
+        """Подгоняет высоту каждого блока менеджера под весь его текст."""
+        for attr in ("text_printing", "text_roll", "text_cutting",
+                     "text_folding", "text_binding"):
+            te = getattr(self, attr, None)
+            refit = getattr(te, "_refit", None)
+            if refit is not None:
+                refit()
 
     def _build_report(self, ft, fs, fn, tf, bt, bl, tb, tw):
         c=self.copies; tpr=0
@@ -2914,7 +4624,7 @@ class PrintingCalculator(QMainWindow):
         cms="Ч/б (принудительно)" if self.force_bw else "По файлу"
         lines=["="*60,"АНАЛИЗ ПРОЕКТНОЙ ДОКУМЕНТАЦИИ","="*60,f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
             f"Всего страниц в источнике: {self.total_source}",f"Количество экземпляров: {c}",f"Режим цветности: {cms}","",
-            "ПЕЧАТЬ (исходные форматы × экземпляры):"]
+            "ПЕЧАТЬ (с учетом кол-ва экземпляров):"]
         if sb: lines.append("• Стандартные форматы:"); lines.extend(f"  {l}" for l in sb)
         if nb:
             if sb: lines.append("")
@@ -2946,6 +4656,194 @@ class PrintingCalculator(QMainWindow):
             lines.append(f"Итого брошюр: {tb}"); lines.append("")
         lines.append("─"*60); lines.append(f"ВЕС: {self._fw(tw)}"); lines.append("="*60)
         self.text_report.setText("\n".join(lines))
+        # Структурированные данные для генерации PDF (сохраняем для кнопки PDF)
+        self._report_data = {
+            "date": datetime.now().strftime('%d.%m.%Y %H:%M'),
+            "total_source": self.total_source,
+            "copies": c,
+            "color_mode": cms,
+            "print_std": sb,
+            "print_ext": nb,
+            "print_custom": cb,
+            "print_roll": rb_lines,
+            "total_pages": tpr,
+            "folding_type": ft,
+            "folding_std": fs,
+            "folding_nonstd": fn,
+            "folding_total": tf,
+            "binding_type": bt,
+            "binding_lines": bl,
+            "binding_total": tb,
+            "weight": tw,
+        }
+
+    def generate_client_pdf(self):
+        """Красиво оформленный PDF-отчёт для клиента."""
+        data = getattr(self, "_report_data", None)
+        if not data:
+            QMessageBox.warning(self, "Нет данных", "Сначала выполните анализ.")
+            return
+        default_name = f"Отчет_{datetime.now().strftime('%d.%m.%Y_%H%M')}.pdf"
+        out_path, _ = QFileDialog.getSaveFileName(
+            self, "Сохранить PDF-отчёт", default_name, "PDF (*.pdf)"
+        )
+        if not out_path:
+            return
+        if not out_path.lower().endswith(".pdf"):
+            out_path += ".pdf"
+        try:
+            self._render_report_pdf(data, out_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать PDF:\n{e}")
+            return
+        try:
+            if sys.platform == "win32": os.startfile(out_path)
+            elif sys.platform == "darwin": subprocess.Popen(["open", out_path])
+            else: subprocess.Popen(["xdg-open", out_path])
+        except Exception:
+            pass
+        QMessageBox.information(self, "Готово", f"PDF-отчёт сохранён:\n{out_path}")
+
+    def _render_report_pdf(self, data, out_path):
+        """Рисует PDF-отчёт (A4) с логотипом, шапкой и разделами."""
+        import fitz as _fitz
+
+        BLUE = (0.0, 0.478, 1.0)          # #007AFF
+        BLUE_SOFT = (0.84, 0.91, 1.0)     # #D6E8FF
+        DARK = (0.11, 0.11, 0.12)
+        GREY = (0.53, 0.53, 0.54)
+        GREEN = (0.13, 0.65, 0.35)
+
+        reg = _fitz.Font(fontfile=r"C:\Windows\Fonts\segoeui.ttf")
+        bold = _fitz.Font(fontfile=r"C:\Windows\Fonts\segoeuib.ttf")
+
+        doc = _fitz.open()
+        pw, ph = _fitz.paper_size("a4")
+        margin = 45
+        content_w = pw - 2 * margin
+
+        page = doc.new_page(width=pw, height=ph)
+        y = margin
+
+        def new_page_if_needed(need):
+            nonlocal page, y
+            if y + need > ph - margin:
+                page = doc.new_page(width=pw, height=ph)
+                y = margin + 20
+
+        # ── Шапка с логотипом ──
+        logo = resource_path("assets/logo.png")
+        if os.path.exists(logo):
+            logo_rect = _fitz.Rect(margin, y, margin + 150, y + 33)
+            try:
+                page.insert_image(logo_rect, filename=logo, keep_proportion=True)
+            except Exception:
+                pass
+        # Дата справа в шапке
+        page.insert_textbox(
+            _fitz.Rect(pw - margin - 200, y + 4, pw - margin, y + 30),
+            data["date"], fontname="helv", fontsize=9, color=GREY,
+            align=_fitz.TEXT_ALIGN_RIGHT,
+        )
+        y += 40
+
+        # Цветная полоса под шапкой
+        page.draw_line(_fitz.Point(margin, y), _fitz.Point(pw - margin, y),
+                       color=BLUE, width=2)
+        y += 16
+
+        # Заголовок
+        tw = _fitz.TextWriter(page.rect)
+        tw.append((margin, y + 14), "Расчёт стоимости печати",
+                  font=bold, fontsize=18)
+        tw.write_text(page, color=DARK)
+        y += 30
+
+        def section(title):
+            nonlocal y
+            new_page_if_needed(34)
+            band = _fitz.Rect(margin, y, pw - margin, y + 24)
+            page.draw_rect(band, color=None, fill=BLUE_SOFT)
+            tws = _fitz.TextWriter(page.rect)
+            tws.append((margin + 8, y + 17), title, font=bold, fontsize=11.5)
+            tws.write_text(page, color=BLUE)
+            y += 32
+
+        def line(text, indent=8, size=10, color=DARK, is_bold=False, gap=15):
+            nonlocal y
+            new_page_if_needed(gap + 2)
+            twl = _fitz.TextWriter(page.rect)
+            twl.append((margin + indent, y), text,
+                       font=(bold if is_bold else reg), fontsize=size)
+            twl.write_text(page, color=color)
+            y += gap
+
+        # ── Сводка ──
+        section("Общие сведения")
+        line(f"Всего страниц в источнике: {data['total_source']}")
+        line(f"Количество экземпляров: {data['copies']}")
+        line(f"Режим цветности: {data['color_mode']}")
+        y += 4
+
+        # ── Печать ──
+        section("Печать (с учётом количества экземпляров)")
+        groups = [
+            ("Стандартные форматы", data["print_std"]),
+            ("Расширенные форматы", data["print_ext"]),
+            ("Произвольные форматы", data["print_custom"]),
+            ("Нестандартные / рулонные форматы", data["print_roll"]),
+        ]
+        any_print = any(items for _, items in groups)
+        if any_print:
+            for title, items in groups:
+                if not items:
+                    continue
+                line(title + ":", indent=8, is_bold=True, color=GREY)
+                for it in items:
+                    line("• " + it, indent=20)
+            line(f"Итого страниц: {data['total_pages']}", is_bold=True, gap=18)
+        else:
+            line("Нет данных")
+        y += 4
+
+        # ── Фальцовка ──
+        if data["folding_type"]:
+            section(f"Фальцовка под {data['folding_type']}")
+            if data["folding_std"]:
+                line("Стандартные форматы:", is_bold=True, color=GREY)
+                for it in data["folding_std"]:
+                    line("• " + it, indent=20)
+            if data["folding_nonstd"]:
+                line("Нестандартные / рулонные форматы:", is_bold=True, color=GREY)
+                for it in data["folding_nonstd"]:
+                    line("• " + it, indent=20)
+            if not (data["folding_std"] or data["folding_nonstd"]):
+                line("Не требуется")
+            line(f"Итого листов: {data['folding_total']}", is_bold=True, gap=18)
+            y += 4
+
+        # ── Брошюровка ──
+        if data["binding_type"]:
+            section(f"Брошюровка на пружину {data['binding_type']}")
+            if data["binding_lines"]:
+                for it in data["binding_lines"]:
+                    line("• " + it, indent=20)
+            else:
+                line("Не требуется")
+            line(f"Итого брошюр: {data['binding_total']}", is_bold=True, gap=18)
+            y += 4
+
+        # ── Вес ──
+        new_page_if_needed(60)
+        card = _fitz.Rect(margin, y, pw - margin, y + 44)
+        page.draw_rect(card, color=BLUE, fill=BLUE_SOFT, width=1, radius=0.08)
+        twt = _fitz.TextWriter(page.rect)
+        twt.append((margin + 14, y + 28), "Итоговый вес: ", font=bold, fontsize=13)
+        twt.append((margin + 118, y + 28), self._fw(data["weight"]), font=bold, fontsize=14)
+        twt.write_text(page, color=DARK)
+
+        doc.save(out_path, deflate=True)
+        doc.close()
 
     def copy_report(self):
         txt=self.text_report.toPlainText()
@@ -2957,11 +4855,8 @@ class PrintingCalculator(QMainWindow):
                 p.communicate(txt.encode('utf-8'))
             except Exception:
                 pass
-        self.btn_copy_report.setText("Скопировано")
-        self.btn_copy_report.setStyleSheet(
-            "QPushButton{background-color:#28a745;color:white;border:none;"
-            "padding:8px 16px;border-radius:4px;font-weight:bold;}"
-        )
+        self.btn_copy_report.setText("✅ Скопировано")
+        self.btn_copy_report.setStyleSheet(_qss_button("filled", accent=THEME["success"]))
         QTimer.singleShot(
             1500,
             lambda: (
@@ -3049,7 +4944,8 @@ def _check_update_background():
     has_update, latest_ver, dl_url, _upd_err = check_for_update()
     if has_update:
         _mark_update_attempt(latest_ver)
-        UpdateDialog(latest_ver, dl_url).exec()
+        dlg = UpdateDialog(latest_ver, dl_url)
+        dlg.show()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

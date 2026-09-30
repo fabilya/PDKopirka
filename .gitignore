@@ -1,0 +1,20 @@
+# Сборка и артефакты
+build/
+dist/
+installer_output/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+
+# Секреты и токены
+.env
+generate_token*.py
+
+# Локальные/тестовые файлы
+Screenshot_*.jpg
+Отчет_*.pdf
+Пример.pdf

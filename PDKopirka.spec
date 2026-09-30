@@ -2,7 +2,7 @@
 
 import os
 
-_datas = [('version.txt', '.')]
+_datas = [('version.txt', '.'), ('assets', 'assets')]
 if os.path.isfile('.env'):
     _datas.append(('.env', '.'))
 
