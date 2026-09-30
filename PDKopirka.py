@@ -264,7 +264,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -803,6 +803,19 @@ class UpdateDialog(QDialog):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CHANGELOG_HISTORY = [
+    {
+        "version": "2.3.4",
+        "date": "30.09.2026",
+        "sections": [
+            ("📄 PDF-отчёт для клиента", [
+                "Убрана оранжевая плашка сверху — чистая белая шапка с логотипом",
+                "Заголовок «Анализ файлов» вынесен в шапку и выделен оранжевым",
+                "Дата выровнена по правому краю — больше не накладывается на заголовок",
+                "Исправлены «?????» в дате и подвале (шрифт с поддержкой кириллицы)",
+                "Внизу оставлена только серая линия-разделитель",
+            ]),
+        ],
+    },
     {
         "version": "2.3.3",
         "date": "30.09.2026",
@@ -4880,34 +4893,34 @@ class PrintingCalculator(QMainWindow):
                 page = doc.new_page(width=pw, height=ph)
                 y = margin + 10
 
-        # ── Оранжевая шапка на всю ширину ──
-        header_h = 92
-        page.draw_rect(_fitz.Rect(0, 0, pw, header_h), color=None, fill=ORANGE)
-        # Логотип на белой плашке слева
+        # ── Шапка без цветной плашки: логотип слева, заголовок оранжевым ──
+        y = margin
         logo = resource_path("assets/logo.png")
-        pad = 14
-        box_w, box_h = 168, 52
-        box_y = (header_h - box_h) / 2
-        page.draw_rect(_fitz.Rect(margin, box_y, margin + box_w, box_y + box_h),
-                       color=None, fill=WHITE, radius=0.14)
+        logo_w, logo_h = 150, 44
         if os.path.exists(logo):
             try:
                 page.insert_image(
-                    _fitz.Rect(margin + 12, box_y + 10, margin + box_w - 12, box_y + box_h - 10),
+                    _fitz.Rect(margin, y, margin + logo_w, y + logo_h),
                     filename=logo, keep_proportion=True,
                 )
             except Exception:
                 pass
-        # Заголовок справа в шапке
+        # Заголовок справа от логотипа — оранжевым (не белым)
         tw = _fitz.TextWriter(page.rect)
-        tw.append((pw - margin - 300, 40), "Расчёт стоимости печати",
-                  font=bold, fontsize=16)
-        tw.write_text(page, color=WHITE)
-        date_box = _fitz.Rect(pw - margin - 300, 48, pw - margin, 74)
-        page.insert_textbox(date_box, f"Дата: {data['date']}",
-                            fontname="helv", fontsize=9.5, color=WHITE,
-                            align=_fitz.TEXT_ALIGN_RIGHT)
-        y = header_h + 26
+        tw.append((margin + logo_w + 22, y + 20), "Анализ файлов",
+                  font=bold, fontsize=18)
+        tw.write_text(page, color=ORANGE)
+        # Дата — справа, выровнена по правому краю, серым
+        date_text = f"Дата: {data['date']}"
+        dw = reg.text_length(date_text, fontsize=10)
+        twd = _fitz.TextWriter(page.rect)
+        twd.append((pw - margin - dw, y + 20), date_text, font=reg, fontsize=10)
+        twd.write_text(page, color=GREY)
+        y += logo_h + 10
+        # Тонкая оранжевая линия-разделитель под шапкой
+        page.draw_line(_fitz.Point(margin, y), _fitz.Point(pw - margin, y),
+                       color=ORANGE, width=1.6)
+        y += 20
 
         def section(title):
             nonlocal y
@@ -5005,17 +5018,11 @@ class PrintingCalculator(QMainWindow):
         twt2.append((margin + 150, y + 33), self._fw(data["weight"]), font=bold, fontsize=16)
         twt2.write_text(page, color=WHITE)
 
-        # ── Подвал ──
-        foot_y = ph - 26
+        # ── Подвал: только серая линия ──
+        foot_y = ph - 30
         page.draw_line(_fitz.Point(margin, foot_y - 6),
                        _fitz.Point(pw - margin, foot_y - 6),
                        color=(0.85, 0.85, 0.86), width=0.8)
-        page.insert_textbox(
-            _fitz.Rect(margin, foot_y - 4, pw - margin, foot_y + 14),
-            "PDKopirka — калькулятор расчёта проектной документации",
-            fontname="helv", fontsize=8, color=GREY,
-            align=_fitz.TEXT_ALIGN_CENTER,
-        )
 
         doc.save(out_path, deflate=True)
         doc.close()
