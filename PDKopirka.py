@@ -805,7 +805,7 @@ class UpdateDialog(QDialog):
 _CHANGELOG_HISTORY = [
     {
         "version": "2.3.3",
-        "date": "29.09.2026",
+        "date": "30.09.2026",
         "sections": [
             ("🎨 Новый дизайн", [
                 "Полностью обновлён интерфейс — современный стиль с синим акцентом, скруглениями и мягкими тенями",
@@ -814,29 +814,49 @@ _CHANGELOG_HISTORY = [
                 "Переключатели «Цветность», «Брошюровка», «Фальцовка» выполнены как анимированные сегменты",
                 "«Учитывать заливку цветом» и «Резка» — тумблеры с синей подсветкой",
                 "Плавная анимация при переключении вкладок",
+                "Окно компактное — ровно по ширине строки вкладок, прокрутки на главной нет",
             ]),
             ("📂 Выбор файлов", [
-                "Кнопки «Папка» и «Файл» убраны — по клику на зону открывается проводник",
-                "Проводник стартует в папке «Загрузки» и имеет быстрый доступ к основным папкам",
-                "В проводнике есть редактируемая адресная строка — путь можно вписать вручную",
-                "Добавлен столбец «Дата изменения» с сортировкой от нового к старому по клику",
-                "Папки и PDF получили отдельные иконки",
+                "Кнопки «Папка» и «Файл» убраны — по клику на зону открывается встроенный проводник",
+                "Проводник стартует в папке «Загрузки» и имеет быстрый доступ («Мой компьютер», диск C:)",
+                "Редактируемая адресная строка — путь можно вписать вручную и нажать Enter",
+                "Столбец «Дата изменения» с сортировкой от нового к старому по клику",
+                "Папки и PDF получили отдельные иконки; Enter на папке — вход, на PDF — выбор",
             ]),
             ("🎨 Заливка и детализация", [
                 "Единая метрика заливки — покрытие тонером/чернилами (все не-белые пиксели), для цветных и ч/б страниц",
                 "Страницы с заливкой более 50% помечаются в детализации как «[заливка]»",
                 "Проценты во вкладке «Заливка» и в «Детализации» теперь совпадают",
-                "Анализ страницы выполняется одним рендером вместо трёх — анализ стал заметно быстрее",
+                "Анализ стал заметно быстрее: многопоточная обработка страниц (в ~3.5 раза)",
+            ]),
+            ("📐 Нестандартный формат", [
+                "Сетка форматов: столбцы A4/A3/A2/A1/A0, строки ×1…×9; цвета по формату",
+                "При наведении подсвечиваются ячейка и её строка/столбец — видно, что выбираешь",
+                "Строки A0×2…A0×9 отмечены как «ближайший формат» с подсказкой масштаба",
+                "При выборе A0×N — предупреждение: печать возможна только в уменьшенном виде",
+                "Резка в рулонной печати выставляется автоматически (допуск 40 мм к рулонам 610/841)",
+                "Подсказка «?» с примерами; схема-пример резки; заголовок «Обнаружен неизвестный формат»",
+            ]),
+            ("📄 Отчёт для клиента", [
+                "Кнопка «Сгенерировать PDF» — фирменный отчёт A4 с логотипом в цветах логотипа (#EF7F1A)",
+                "Кнопки «Копировать» и «Сгенерировать PDF» — в один ряд",
+            ]),
+            ("👔 Менеджер", [
+                "Блоки показывают всю информацию без внутренней прокрутки",
+                "Фальцовка: нестандартные/рулонные сворачиваются в строку «A0 → …»",
+                "Цветность/фальцовка/брошюровка — без цветового выделения резки (логика сохранена)",
             ]),
             ("⚙️ Параметры", [
-                "Количество экземпляров — поле с кнопками «−» и «+»",
-                "Подсказка внизу убрана, лишнее пустое пространство сокращено",
-                "Окно программы стало компактнее, вкладка «Менеджер» — без прокрутки",
+                "Количество экземпляров — поле с кнопками «−» и «+», значение не меняется случайно",
+                "Кнопки «Нашли ошибку?» (иконка Telegram) и «Что нового» — в одну строку",
+                "Версия указана ненавязчиво: в подписи внизу и в заголовке окна",
             ]),
             ("🔄 Обновления", [
+                "Автообновление с любой прошлой версии на новую (по GitHub Releases)",
                 "При ошибке загрузки обновления показывается конкретная причина",
-                "Диалог обновления больше не блокирует окно программы",
-                "Исправлено отображение версии при запуске из исходников (показывалась установленная версия)",
+                "Диалог обновления не блокирует окно программы",
+                "Исправлено отображение версии при запуске из исходников",
+                "Попап «Что нового» — безрамочное окно со скруглёнными углами и тенью",
             ]),
         ],
     },
@@ -897,13 +917,24 @@ class WhatsNewDialog(QDialog):
     def _build_ui(self):
         entry = self._current_entry()
 
-        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        outer = QVBoxLayout(self); outer.setContentsMargins(14, 14, 14, 14); outer.setSpacing(0)
         card = QFrame(); card.setObjectName("WNCard")
         card.setStyleSheet(
-            f"QFrame#WNCard{{background:{THEME['bg']};"
-            f"border:1px solid {THEME['divider']};border-radius:{self.RADIUS}px;}}"
+            f"QFrame#WNCard{{background:{THEME['surface']};"
+            f"border:1px solid {THEME['border_strong']};border-radius:{self.RADIUS}px;}}"
         )
         outer.addWidget(card)
+
+        # Тень, отделяющая окно от фона
+        try:
+            from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+            eff = QGraphicsDropShadowEffect(card)
+            eff.setBlurRadius(40)
+            eff.setOffset(0, 10)
+            eff.setColor(QColor(0, 0, 0, 90))
+            card.setGraphicsEffect(eff)
+        except Exception:
+            pass
 
         root = QVBoxLayout(card); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
@@ -2319,9 +2350,16 @@ class SwitchCheckBox(QCheckBox):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(30)
+        # Ширина по содержимому (трек + текст), но не меньше, чтобы тумблер не сжимался.
+        self.setMinimumWidth(60)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         # Свитч не должен держать клавиатурный фокус: иначе при disable()
         # Qt переводит фокус на следующий виджет (например, на поле экземпляров).
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return hint.__class__(max(hint.width(), 60), max(hint.height(), 30))
 
     def sizeHint(self):
         hint = super().sizeHint()
@@ -2535,8 +2573,14 @@ class AnalysisThread(QThread):
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
             )
-            img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-            a = np.asarray(img, dtype=np.uint8)
+            # Читаем пиксели напрямую (без PNG-энкода и PIL) — примерно в 2 раза быстрее.
+            a = np.frombuffer(pix.samples, dtype=np.uint8)
+            if pix.n == 3:
+                a = a.reshape(pix.height, pix.width, 3)
+            elif pix.n == 4:
+                a = a.reshape(pix.height, pix.width, 4)[..., :3]
+            else:
+                a = a.reshape(pix.height, pix.width, pix.n)[..., :3]
             if a.ndim != 3:
                 return (False, 0.0, 0.0)
             r = a[..., 0].astype(np.int16)
@@ -2576,32 +2620,64 @@ class AnalysisThread(QThread):
                 return name
         return None
 
+    def _analyze_single_page(self, pdf_path, pno):
+        """Анализ одной страницы в отдельном потоке (открывает свой документ)."""
+        doc = None
+        try:
+            doc = fitz.open(pdf_path)
+            p = doc[pno]
+            w, h = page_size_mm(p)
+            if self.count_fill and not self.force_bw:
+                col, color_pct, ink_pct = self.analyze_page(p)
+                fill = (color_pct, ink_pct)
+            else:
+                col = False if self.force_bw else self.analyze_page(p)[0]
+                fill = None
+            return pno, w, h, col, fill, None
+        except Exception as e:
+            return pno, 0.0, 0.0, False, None, str(e)
+        finally:
+            if doc is not None:
+                doc.close()
+
     def run(self):
         try:
             grand=defaultdict(float); total_source=0; file_page_counts=[]; file_details=[]; total_files=len(self.pdfs)
+            from concurrent.futures import ThreadPoolExecutor
+            # Число потоков: по числу ядер, разумный диапазон
+            max_workers = max(2, min(8, (os.cpu_count() or 4)))
+            # Нестандартные groups собираем со всех файлов и спрашиваем в самом конце
+            pending_unknown = []  # (pdf_path, w, h, col, pages)
             for file_idx, pdf_path in enumerate(self.pdfs):
                 if self._stop_requested: break
                 self._pause_point()
                 if self._stop_requested: break
                 try:
-                    with fitz.open(pdf_path) as doc:
-                        total=len(doc); total_source+=total; file_page_counts.append(total)
-                        name=os.path.basename(pdf_path); self.status.emit(f"Анализ: {name} ({total} стр.)")
-                        ff=defaultdict(int); fp=defaultdict(list); frb=frc=0.0; frb_p,frc_p=[],[]
-                        cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]; file_fill_pcts={}
-                        for i,p in enumerate(doc):
+                    doc=fitz.open(pdf_path)
+                    total=len(doc)
+                    doc.close()
+                    total_source+=total; file_page_counts.append(total)
+                    name=os.path.basename(pdf_path); self.status.emit(f"Анализ: {name} ({total} стр.)")
+                    ff=defaultdict(int); fp=defaultdict(list); frb=frc=0.0; frb_p,frc_p=[],[]
+                    cg=defaultdict(list); file_roll_groups=[]; file_fill_pages=[]; file_fill_pcts={}
+
+                    done=0
+                    # Параллельно анализируем страницы (рендер PDF отпускает GIL)
+                    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                        futures = [ex.submit(self._analyze_single_page, pdf_path, i)
+                                   for i in range(total)]
+                        for fut in futures:
                             if self._stop_requested: break
                             self._pause_point()
                             if self._stop_requested: break
-                            pn=i+1
-                            w, h = page_size_mm(p)
-                            if self.count_fill and not self.force_bw:
-                                col, color_pct, ink_pct = self.analyze_page(p)
-                                file_fill_pcts[pn] = (color_pct, ink_pct)
-                                if ink_pct > FILL_MIN_RATIO * 100:
+                            pno, w, h, col, fill, err = fut.result()
+                            if err:
+                                continue
+                            pn = pno + 1
+                            if fill is not None:
+                                file_fill_pcts[pn] = fill
+                                if fill[1] > FILL_MIN_RATIO * 100:
                                     file_fill_pages.append(pn)
-                            else:
-                                col = False if self.force_bw else self.analyze_page(p)[0]
                             fA=self.match_format_with_tolerance(w,h,ISO_A)
                             fN=self.match_format_with_tolerance(w,h,ISO_A_NONSTANDARD)
                             if fA:
@@ -2609,70 +2685,77 @@ class AnalysisThread(QThread):
                             elif fN:
                                 key=f"{fN} {'цвет' if col else 'ч/б'}"; grand[key]+=1; ff[key]+=1; fp[key].append(pn)
                             else: cg[(w,h,col)].append(pn)
-                            prog=int(100*(file_idx+(i+1)/total)/total_files); self.progress.emit(prog); time.sleep(0.001)
-                        if self._stop_requested:
-                            file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts}); break
-                        for (w,h,col),pages in cg.items():
-                            if self._stop_requested: break
-                            self._pause_point()
-                            if self._stop_requested: break
-                            self.need_user_input.emit(w,h,col,pages,pdf_path); self._wait_for_user()
-                            if self._stop_requested: break
-                            action=self._user_action; value=self._user_value; kind="цвет" if col else "ч/б"
-                            if action=="skip": pass
-                            elif action=="format":
-                                key=f"{value} {kind}"; grand[key]+=len(pages); ff[key]+=len(pages); fp[key].extend(pages)
-                            elif action == "a0_oversize":
-                                # Печатаем A0xN на рулоне 910 мм (по большей стороне печатаемого)
-                                a0_key = value
-                                pw, ph = A0_PRINTABLE_MM[a0_key]
-                                ow, oh = A0_OVERSIZE_MM[a0_key]
-                                key = f"{a0_key} {kind}"
-                                grand[key] += len(pages)
-                                ff[key] += len(pages)
-                                fp[key].extend(pages)
-                                # Добавляем в рулон по большей стороне печатаемого формата
-                                mm = max(pw, ph) * len(pages)
-                                if col:
-                                    grand["Рулон цвет мм"] += mm
-                                    frc += mm
-                                    frc_p.extend(pages)
-                                else:
-                                    grand["Рулон ч/б мм"] += mm
-                                    frb += mm
-                                    frb_p.extend(pages)
-                                # Сохраняем как отдельную A0-группу для CRM и клиента
-                                file_roll_groups.append({
-                                    "w": ow, "h": oh, "color": col,
-                                    "count": len(pages),
-                                    "per_page_mm": max(pw, ph),
-                                    "total_mm": mm,
-                                    "pages": sorted(pages),
-                                    "cutting": False,
-                                    "a0_key": a0_key,
-                                    "printable_w": pw,
-                                    "printable_h": ph,
-                                })
-                            elif action in ("roll_mm", "roll_auto"):
-                                if isinstance(value, tuple):
-                                    ppm, need_cut = float(value[0]), bool(value[1])
-                                else:
-                                    ppm, need_cut = float(value), False
-                                mm = ppm * len(pages)
-                                if col:
-                                    grand["Рулон цвет мм"] += mm; frc += mm; frc_p.extend(pages)
-                                else:
-                                    grand["Рулон ч/б мм"] += mm; frb += mm; frb_p.extend(pages)
-                                file_roll_groups.append({
-                                    "w": w, "h": h, "color": col, "count": len(pages),
-                                    "per_page_mm": ppm, "total_mm": mm, "pages": sorted(pages),
-                                    "cutting": need_cut,
-                                })
-                                sk = f"{w:.0f}×{h:.0f}"
-                                rfk = f"_roll_fold_{sk}_{kind}"
-                                grand[rfk] = grand.get(rfk, 0) + len(pages)
-                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts})
+                            done+=1
+                            prog=int(100*(file_idx+(done)/total)/total_files); self.progress.emit(prog)
+                    if self._stop_requested:
+                        file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts}); break
+                    # Запоминаем нестандартные группы для обработки после всех файлов
+                    for (w,h,col),pages in cg.items():
+                        pending_unknown.append((name, pdf_path, w, h, col, pages))
+                    file_details.append({"name":name,"total":total,"formats":dict(ff),"pages":{k:sorted(v) for k,v in fp.items()},"roll_bw":frb,"roll_color":frc,"roll_bw_pages":sorted(frb_p),"roll_color_pages":sorted(frc_p),"roll_groups":file_roll_groups,"fill_pages":sorted(file_fill_pages),"fill_pcts":file_fill_pcts})
                 except Exception as e: self.error.emit(f"Ошибка при обработке {pdf_path}: {e}"); continue
+
+            # ── После анализа всех файлов: по очереди спрашиваем про нестандартные форматы ──
+            for (name, pdf_path, w, h, col, pages) in pending_unknown:
+                if self._stop_requested: break
+                self._pause_point()
+                if self._stop_requested: break
+                self.need_user_input.emit(w,h,col,pages,pdf_path); self._wait_for_user()
+                # Ответ применяем к нужному файлу (последний добавленный с этим именем)
+                fd_idx = None
+                for k in range(len(file_details)-1, -1, -1):
+                    if file_details[k].get("name") == name:
+                        fd_idx = k; break
+                if fd_idx is None:
+                    continue
+                fd = file_details[fd_idx]
+                action=self._user_action; value=self._user_value; kind="цвет" if col else "ч/б"
+                ff = fd["formats"]; fp = fd["pages"]
+                if action=="skip":
+                    pass
+                elif action=="format":
+                    key=f"{value} {kind}"; grand[key]+=len(pages); ff[key]=ff.get(key,0)+len(pages); fp.setdefault(key,[]).extend(pages)
+                elif action == "a0_oversize":
+                    a0_key = value
+                    pw, ph = A0_PRINTABLE_MM[a0_key]
+                    ow, oh = A0_OVERSIZE_MM[a0_key]
+                    key = f"{a0_key} {kind}"
+                    grand[key] += len(pages)
+                    ff[key] = ff.get(key,0)+len(pages)
+                    fp.setdefault(key,[]).extend(pages)
+                    mm = max(pw, ph) * len(pages)
+                    if col:
+                        grand["Рулон цвет мм"] += mm; fd["roll_color"] = fd.get("roll_color",0)+mm
+                        fd["roll_color_pages"] = sorted(set(fd.get("roll_color_pages",[]))|set(pages))
+                    else:
+                        grand["Рулон ч/б мм"] += mm; fd["roll_bw"] = fd.get("roll_bw",0)+mm
+                        fd["roll_bw_pages"] = sorted(set(fd.get("roll_bw_pages",[]))|set(pages))
+                    fd.setdefault("roll_groups",[]).append({
+                        "w": ow, "h": oh, "color": col, "count": len(pages),
+                        "per_page_mm": max(pw, ph), "total_mm": mm, "pages": sorted(pages),
+                        "cutting": False, "a0_key": a0_key,
+                        "printable_w": pw, "printable_h": ph,
+                    })
+                elif action in ("roll_mm", "roll_auto"):
+                    if isinstance(value, tuple):
+                        ppm, need_cut = float(value[0]), bool(value[1])
+                    else:
+                        ppm, need_cut = float(value), False
+                    mm = ppm * len(pages)
+                    if col:
+                        grand["Рулон цвет мм"] += mm; fd["roll_color"] = fd.get("roll_color",0)+mm
+                        fd["roll_color_pages"] = sorted(set(fd.get("roll_color_pages",[]))|set(pages))
+                    else:
+                        grand["Рулон ч/б мм"] += mm; fd["roll_bw"] = fd.get("roll_bw",0)+mm
+                        fd["roll_bw_pages"] = sorted(set(fd.get("roll_bw_pages",[]))|set(pages))
+                    fd.setdefault("roll_groups",[]).append({
+                        "w": w, "h": h, "color": col, "count": len(pages),
+                        "per_page_mm": ppm, "total_mm": mm, "pages": sorted(pages),
+                        "cutting": need_cut,
+                    })
+                    sk = f"{w:.0f}×{h:.0f}"
+                    grand[f"_roll_fold_{sk}_{kind}"] = grand.get(f"_roll_fold_{sk}_{kind}", 0) + len(pages)
+
             if self._stop_requested:
                 self.finished.emit(dict(grand),total_source,file_page_counts,file_details); self.stopped.emit()
             else:
@@ -2744,6 +2827,8 @@ class DropArea(QFrame):
             f"color:{THEME['text_muted']};background:transparent;border:none;"
         )
         self.sub_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.sub_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.sub_label.setMinimumWidth(0)
         layout.addWidget(self.sub_label)
         layout.addStretch()
 
@@ -3225,9 +3310,9 @@ class PathPickerDialog(QDialog):
 class PrintingCalculator(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Калькулятор расчёта проектной документации")
-        self.setGeometry(100,100,1000,640)
-        self.setMinimumSize(980, 620)
+        self.setWindowTitle(f"Калькулятор расчёта проектной документации · v{get_app_version()}")
+        self.setGeometry(100,100,1160,660)
+        self.setMinimumHeight(420)
         self.setAcceptDrops(True)
         icon_path = resource_path("logo.ico")
         if os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
@@ -3241,7 +3326,9 @@ class PrintingCalculator(QMainWindow):
         self.need_binding_a4=self.need_binding_a3=False
         self.thread=self.current_dialog=None; self._history_items=[]
         self.init_ui()
-        # Компактный стартовый размер: ширина — до края вкладки «Заливка»
+        # Минимальная ширина — по строке вкладок, чтобы вкладки не обрезались
+        self._apply_tab_min_width()
+        # Компактный стартовый размер: ширина ровно до края вкладки «Заливка»
         QTimer.singleShot(0, self._reset_window_size)
         QTimer.singleShot(100, self.refresh_history)
 
@@ -3467,18 +3554,33 @@ class PrintingCalculator(QMainWindow):
             QTimer.singleShot(0, self._reset_window_size)
 
     def _min_window_width(self):
-        """Ширина окна = правый край вкладки «Заливка» + небольшой отступ."""
+        """Ширина окна = естественная ширина строки вкладок (+небольшой отступ)."""
         bar = self.tabs.tabBar()
-        # Последняя вкладка — «Заливка»
-        idx = self.tabs.count() - 1
-        last = bar.tabRect(idx)
-        return max(720, last.right() + 36)
+        return max(720, bar.sizeHint().width() + 36)
+
+    def _apply_tab_min_width(self):
+        """Не даём окну сжиматься уже, чем нужно строке вкладок (иначе вкладки
+        обрезаются и появляются стрелки прокрутки). См. apply_style/init_ui."""
+        w = self._min_window_width()
+        if self.minimumWidth() < w:
+            self.setMinimumWidth(w)
 
     def _reset_window_size(self):
-        """Компактный размер окна для обычных вкладок."""
-        w = self._min_window_width()
-        h = self.minimumSizeHint().height()
-        h = max(560, min(h if h > 0 else 600, 760))
+        """Компактный размер окна для обычных вкладок: ширина — по вкладкам,
+        высота — чтобы содержимое текущей вкладки помещалось без прокрутки."""
+        self._apply_tab_min_width()
+        w = max(self.minimumWidth(), self._min_window_width())
+        # Высоту подгоняем под содержимое вкладки «Параметры»
+        h = 620
+        try:
+            sc = self.tabs.widget(0).findChild(QScrollArea)
+            if sc is not None and sc.widget() is not None:
+                sc.widget().adjustSize()
+                h = sc.widget().sizeHint().height() + 96  # шапка вкладок + отступы
+        except Exception:
+            pass
+        screen = QApplication.primaryScreen().availableGeometry()
+        h = max(560, min(h, screen.height() - 40))
         self.resize(w, h)
 
     def _fit_window_for_manager(self):
@@ -3517,6 +3619,9 @@ class PrintingCalculator(QMainWindow):
         lb=QLabel(text)
         lb.setFont(QFont("Segoe UI Variable Text", 11, QFont.Weight.DemiBold))
         lb.setStyleSheet(f"color:{self.theme['text_muted']};background:transparent;")
+        lb.setWordWrap(True)
+        lb.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        lb.setMinimumWidth(0)
         return lb
 
     def _card_title(self, text):
@@ -3536,13 +3641,19 @@ class PrintingCalculator(QMainWindow):
         webbrowser.open("https://t.me/fabilya")
 
     def create_input_tab(self):
-        w=QWidget(); lay=QVBoxLayout(w); lay.setSpacing(12); lay.setContentsMargins(16,14,16,14)
+        w=QWidget()
+        # Вертикальная прокрутка: при уменьшении высоты окна содержимое не сжимается
+        # и не накладывается друг на друга.
+        outer=QScrollArea(); outer.setWidgetResizable(True); outer.setFrameShape(QFrame.Shape.NoFrame)
+        outer.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        outer.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        inner=QWidget(); lay=QVBoxLayout(inner); lay.setSpacing(12); lay.setContentsMargins(16,14,16,14)
         cols=QHBoxLayout(); cols.setSpacing(12)
 
         # ── Левая колонка (компактная) ──
         left=QVBoxLayout(); left.setSpacing(12)
 
-        dz_card=QFrame(); dz_card.setObjectName("Card"); dcl=QVBoxLayout(dz_card); dcl.setContentsMargins(14,14,14,14); dcl.setSpacing(8)
+        dz_card=QFrame(); dz_card.setObjectName("Card"); dz_card.setMinimumHeight(150); dcl=QVBoxLayout(dz_card); dcl.setContentsMargins(14,14,14,14); dcl.setSpacing(8)
         self.drop_area = DropArea()
         self.drop_area.files_dropped.connect(self._handle_dropped_paths)
         self.drop_area.clicked.connect(self.browse_input)
@@ -3552,7 +3663,7 @@ class PrintingCalculator(QMainWindow):
         # Сохраняем label_path как ссылку на title — чтобы не ломать остальной код
         self.label_path = self.drop_area.title_label
 
-        cf=QFrame(); cf.setObjectName("Card")
+        cf=QFrame(); cf.setObjectName("Card"); cf.setMinimumHeight(130)
         cl=QVBoxLayout(cf); cl.setContentsMargins(16,14,16,14); cl.setSpacing(10)
         cl.addWidget(self._section_title("🎨 Цветность"))
         # Скрытые радио хранят состояние (логика ниже не меняется), видимый UI — сегменты.
@@ -3573,7 +3684,7 @@ class PrintingCalculator(QMainWindow):
         self._update_fill_checkbox()
         left.addWidget(cf)
 
-        pf=QFrame(); pf.setObjectName("Card")
+        pf=QFrame(); pf.setObjectName("Card"); pf.setMinimumHeight(230)
         pl=QVBoxLayout(pf); pl.setContentsMargins(16,14,16,14); pl.setSpacing(10)
         pl.addWidget(self._section_title("⚙️ Параметры"))
         r2=QHBoxLayout(); r2.setSpacing(10)
@@ -3600,7 +3711,7 @@ class PrintingCalculator(QMainWindow):
         self.binding_group.buttonClicked.connect(self.on_binding_changed); self.folding_group.buttonClicked.connect(self.on_params_changed)
         left.addWidget(pf)
         left.addStretch()
-        cols.addLayout(left, stretch=5)
+        cols.addLayout(left, stretch=3)
 
         # ── Правая колонка: статус + анализ + ссылки ──
         right=QVBoxLayout(); right.setSpacing(12)
@@ -3608,9 +3719,17 @@ class PrintingCalculator(QMainWindow):
         sc_card=QFrame(); sc_card.setObjectName("Card")
         scl=QVBoxLayout(sc_card); scl.setContentsMargins(16,14,16,14); scl.setSpacing(10)
         scl.addWidget(self._section_title("⚡ Статус анализа"))
-        self.label_status=QLabel("Готово"); self.label_status.setStyleSheet(f"color:{self.text_color};background:transparent;font-size:15px;font-weight:600;"); scl.addWidget(self.label_status)
+        self.label_status=QLabel("Готово"); self.label_status.setStyleSheet(f"color:{self.text_color};background:transparent;font-size:15px;font-weight:600;")
+        self.label_status.setWordWrap(True)
+        self.label_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.label_status.setMinimumWidth(0)
+        scl.addWidget(self.label_status)
         scl_note=QLabel("Расчёт выполняется локально на вашем компьютере — файлы никуда не отправляются.")
-        scl_note.setStyleSheet(f"color:{self.theme['text_muted']};font-size:11px;background:transparent;"); scl_note.setWordWrap(True); scl.addWidget(scl_note)
+        scl_note.setStyleSheet(f"color:{self.theme['text_muted']};font-size:11px;background:transparent;")
+        scl_note.setWordWrap(True)
+        scl_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        scl_note.setMinimumWidth(0)
+        scl.addWidget(scl_note)
         self.progress_bar=QProgressBar(); self.progress_bar.setValue(0)
         self.progress_bar.setStyleSheet(
             f"QProgressBar{{border:none;border-radius:5px;text-align:center;height:10px;"
@@ -3642,30 +3761,52 @@ class PrintingCalculator(QMainWindow):
 
         # «Нашли ошибку?» и «Что нового» — в одну строку, белые как outlined
         row_btns=QHBoxLayout(); row_btns.setSpacing(8)
-        btn_bug=QPushButton("  Нашли ошибку?")
+        _btn_small = (
+            f"QPushButton{{background-color:transparent;color:{THEME['primary']};"
+            f"border:1px solid {THEME['border_strong']};border-radius:{THEME['r_md']};"
+            f"padding:8px 6px;font-weight:600;font-size:12px;}}"
+            f"QPushButton:hover{{background-color:{THEME['primary_soft']};border-color:{THEME['primary']};}}"
+            f"QPushButton:pressed{{background-color:{THEME['primary_soft']};}}"
+        )
+        btn_bug=QPushButton("Нашли ошибку?")
         tg_icon = QIcon(resource_path("assets/telegram.png"))
         if not tg_icon.isNull():
             btn_bug.setIcon(tg_icon)
-            btn_bug.setIconSize(QSize(18, 18))
-        btn_bug.setFont(QFont("Segoe UI Variable Display",10,QFont.Weight.DemiBold)); btn_bug.setMinimumHeight(40)
+            btn_bug.setIconSize(QSize(15, 15))
+        btn_bug.setFont(QFont("Segoe UI Variable Text",9,QFont.Weight.DemiBold))
+        btn_bug.setMinimumHeight(40)
         btn_bug.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_bug.setStyleSheet(_qss_button("outlined"))
+        btn_bug.setStyleSheet(_btn_small)
+        btn_bug.setMinimumWidth(1)
+        btn_bug.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         btn_bug.setToolTip("Открыть чат в Telegram")
         btn_bug.clicked.connect(self.open_telegram)
         row_btns.addWidget(btn_bug, stretch=1)
 
-        btn_whats_new=QPushButton(f"Что нового (v{get_app_version()})"); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_whats_new.setFont(QFont("Segoe UI Variable Display",10,QFont.Weight.DemiBold))
+        btn_whats_new=QPushButton("🎉  Что нового"); btn_whats_new.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_whats_new.setFont(QFont("Segoe UI Variable Text",9,QFont.Weight.DemiBold))
         btn_whats_new.setMinimumHeight(40)
-        btn_whats_new.setStyleSheet(_qss_button("outlined"))
+        btn_whats_new.setStyleSheet(_btn_small)
+        btn_whats_new.setMinimumWidth(1)
+        btn_whats_new.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        btn_whats_new.setToolTip(f"Что нового в версии {get_app_version()}")
         btn_whats_new.clicked.connect(self.show_whats_new)
         row_btns.addWidget(btn_whats_new, stretch=1)
         lcl.addLayout(row_btns)
+
+        # Ненавязчивая версия внизу карточки
+        ver_lbl=QLabel(f"PDKopirka · v{get_app_version()}")
+        ver_lbl.setStyleSheet(f"color:{self.theme['text_faint']};background:transparent;font-size:10px;")
+        ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lcl.addWidget(ver_lbl)
         right.addWidget(lc_card)
         right.addStretch()
-        cols.addLayout(right, stretch=4)
+        cols.addLayout(right, stretch=5)
 
-        lay.addLayout(cols); return w
+        lay.addLayout(cols)
+        outer.setWidget(inner)
+        root=QVBoxLayout(w); root.setContentsMargins(0,0,0,0); root.addWidget(outer)
+        return w
 
     def _set_binding_index(self, i):
         btn = (self.rb_binding_none, self.rb_binding_a4, self.rb_binding_a3)[i]
@@ -3836,17 +3977,18 @@ class PrintingCalculator(QMainWindow):
         lay.addLayout(head)
         self.text_report=QTextEdit(); self.text_report.setReadOnly(True); self.text_report.setFont(QFont("Cascadia Mono",9))
         self.text_report.setStyleSheet(f"QTextEdit{{background-color:{self.theme['surface']};color:{self.text_color};border:1px solid {self.theme['divider']};border-radius:{self.theme['r_lg']};padding:14px;}}"); lay.addWidget(self.text_report)
-        self.btn_copy_report=QPushButton("📋  Копировать в буфер обмена")
-        self.btn_copy_report.setMinimumHeight(46); self.btn_copy_report.setCursor(Qt.CursorShape.PointingHandCursor)
+        rep_btns=QHBoxLayout(); rep_btns.setSpacing(10)
+        self.btn_copy_report=QPushButton("📋  Копировать"); self.btn_copy_report.setMinimumHeight(46); self.btn_copy_report.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_copy_report.clicked.connect(self.copy_report)
         self._copy_btn_style=_qss_button("filled")
         self.btn_copy_report.setStyleSheet(self._copy_btn_style)
-        lay.addWidget(self.btn_copy_report)
-        btn_pdf=QPushButton("📄  Сгенерировать PDF")
-        btn_pdf.setMinimumHeight(46); btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_pdf.setStyleSheet(_qss_button("success"))
-        btn_pdf.clicked.connect(self.generate_client_pdf)
-        lay.addWidget(btn_pdf); return w
+        rep_btns.addWidget(self.btn_copy_report, stretch=1)
+        self.btn_pdf_report=QPushButton("📄  Сгенерировать PDF"); self.btn_pdf_report.setMinimumHeight(46)
+        self.btn_pdf_report.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pdf_report.setStyleSheet(_qss_button("success"))
+        self.btn_pdf_report.clicked.connect(self.generate_client_pdf)
+        rep_btns.addWidget(self.btn_pdf_report, stretch=1)
+        lay.addLayout(rep_btns); return w
 
     def create_history_tab(self):
         w=QWidget(); lay=QVBoxLayout(w); lay.setContentsMargins(20,16,20,16); lay.setSpacing(10)
@@ -3860,13 +4002,17 @@ class PrintingCalculator(QMainWindow):
         self.history_table.setAlternatingRowColors(True)
         self.history_table.verticalHeader().setVisible(False); self.history_table.setSortingEnabled(True); lay.addWidget(self.history_table)
         btns=QHBoxLayout(); btns.setSpacing(10)
-        btn_load=QPushButton("📂  Загрузить выбранный"); btn_load.setMinimumHeight(44); btn_load.setStyleSheet(_qss_button("filled")); btn_load.setCursor(Qt.CursorShape.PointingHandCursor); btn_load.clicked.connect(self.load_selected_history); btns.addWidget(btn_load)
+        btn_load=QPushButton("📂  Загрузить выбранный"); btn_load.setMinimumHeight(44); btn_load.setStyleSheet(_qss_button("filled")); btn_load.setCursor(Qt.CursorShape.PointingHandCursor); btn_load.clicked.connect(self.load_selected_history)
+        btn_load.setMinimumWidth(1); btn_load.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        btns.addWidget(btn_load, stretch=1)
         btn_delete=QPushButton("🗑  Удалить выбранный"); btn_delete.setMinimumHeight(44)
         btn_delete.setStyleSheet(_qss_button("danger")); btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_delete.clicked.connect(self.delete_selected_history); btns.addWidget(btn_delete); btns.addStretch()
+        btn_delete.setMinimumWidth(1); btn_delete.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        btn_delete.clicked.connect(self.delete_selected_history); btns.addWidget(btn_delete, stretch=1)
         btn_folder=QPushButton("📁  Открыть папку истории"); btn_folder.setMinimumHeight(44)
         btn_folder.setStyleSheet(_qss_button("neutral")); btn_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_folder.clicked.connect(self.open_history_folder); btns.addWidget(btn_folder); lay.addLayout(btns); return w
+        btn_folder.setMinimumWidth(1); btn_folder.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        btn_folder.clicked.connect(self.open_history_folder); btns.addWidget(btn_folder, stretch=1); lay.addLayout(btns); return w
 
     def _fill_pct_color(self, pct):
         if pct<25: return QColor(THEME["success"])
@@ -4705,71 +4851,78 @@ class PrintingCalculator(QMainWindow):
         QMessageBox.information(self, "Готово", f"PDF-отчёт сохранён:\n{out_path}")
 
     def _render_report_pdf(self, data, out_path):
-        """Рисует PDF-отчёт (A4) с логотипом, шапкой и разделами."""
+        """Рисует красивый PDF-отчёт (A4) в фирменных цветах логотипа (#EF7F1A)."""
         import fitz as _fitz
 
-        BLUE = (0.0, 0.478, 1.0)          # #007AFF
-        BLUE_SOFT = (0.84, 0.91, 1.0)     # #D6E8FF
-        DARK = (0.11, 0.11, 0.12)
-        GREY = (0.53, 0.53, 0.54)
-        GREEN = (0.13, 0.65, 0.35)
+        # Фирменная палитра (из логотипа): оранжевый + графитовый
+        ORANGE = (0.937, 0.498, 0.102)        # #EF7F1A
+        ORANGE_DARK = (0.792, 0.388, 0.043)   # #CA6310
+        ORANGE_SOFT = (0.996, 0.937, 0.898)   # мягкий фон #FEEF E5
+        ORANGE_BAND = (0.984, 0.898, 0.835)   # плашка #FB E5 D5
+        GRAPH = (0.169, 0.165, 0.161)         # #2B2A29
+        GREY = (0.55, 0.55, 0.56)
+        WHITE = (1.0, 1.0, 1.0)
 
         reg = _fitz.Font(fontfile=r"C:\Windows\Fonts\segoeui.ttf")
         bold = _fitz.Font(fontfile=r"C:\Windows\Fonts\segoeuib.ttf")
 
         doc = _fitz.open()
         pw, ph = _fitz.paper_size("a4")
-        margin = 45
+        margin = 42
         content_w = pw - 2 * margin
 
         page = doc.new_page(width=pw, height=ph)
-        y = margin
+        y = 0
 
         def new_page_if_needed(need):
             nonlocal page, y
             if y + need > ph - margin:
                 page = doc.new_page(width=pw, height=ph)
-                y = margin + 20
+                y = margin + 10
 
-        # ── Шапка с логотипом ──
+        # ── Оранжевая шапка на всю ширину ──
+        header_h = 92
+        page.draw_rect(_fitz.Rect(0, 0, pw, header_h), color=None, fill=ORANGE)
+        # Логотип на белой плашке слева
         logo = resource_path("assets/logo.png")
+        pad = 14
+        box_w, box_h = 168, 52
+        box_y = (header_h - box_h) / 2
+        page.draw_rect(_fitz.Rect(margin, box_y, margin + box_w, box_y + box_h),
+                       color=None, fill=WHITE, radius=0.14)
         if os.path.exists(logo):
-            logo_rect = _fitz.Rect(margin, y, margin + 150, y + 33)
             try:
-                page.insert_image(logo_rect, filename=logo, keep_proportion=True)
+                page.insert_image(
+                    _fitz.Rect(margin + 12, box_y + 10, margin + box_w - 12, box_y + box_h - 10),
+                    filename=logo, keep_proportion=True,
+                )
             except Exception:
                 pass
-        # Дата справа в шапке
-        page.insert_textbox(
-            _fitz.Rect(pw - margin - 200, y + 4, pw - margin, y + 30),
-            data["date"], fontname="helv", fontsize=9, color=GREY,
-            align=_fitz.TEXT_ALIGN_RIGHT,
-        )
-        y += 40
-
-        # Цветная полоса под шапкой
-        page.draw_line(_fitz.Point(margin, y), _fitz.Point(pw - margin, y),
-                       color=BLUE, width=2)
-        y += 16
-
-        # Заголовок
+        # Заголовок справа в шапке
         tw = _fitz.TextWriter(page.rect)
-        tw.append((margin, y + 14), "Расчёт стоимости печати",
-                  font=bold, fontsize=18)
-        tw.write_text(page, color=DARK)
-        y += 30
+        tw.append((pw - margin - 300, 40), "Расчёт стоимости печати",
+                  font=bold, fontsize=16)
+        tw.write_text(page, color=WHITE)
+        date_box = _fitz.Rect(pw - margin - 300, 48, pw - margin, 74)
+        page.insert_textbox(date_box, f"Дата: {data['date']}",
+                            fontname="helv", fontsize=9.5, color=WHITE,
+                            align=_fitz.TEXT_ALIGN_RIGHT)
+        y = header_h + 26
 
         def section(title):
             nonlocal y
-            new_page_if_needed(34)
-            band = _fitz.Rect(margin, y, pw - margin, y + 24)
-            page.draw_rect(band, color=None, fill=BLUE_SOFT)
+            new_page_if_needed(40)
+            band = _fitz.Rect(margin, y, margin + content_w, y + 26)
+            page.draw_rect(band, color=None, fill=ORANGE_BAND, radius=0.12)
+            # оранжевая засечка слева
+            page.draw_rect(_fitz.Rect(margin, y, margin + 4, y + 26),
+                           color=None, fill=ORANGE, radius=0.4)
             tws = _fitz.TextWriter(page.rect)
-            tws.append((margin + 8, y + 17), title, font=bold, fontsize=11.5)
-            tws.write_text(page, color=BLUE)
-            y += 32
+            tws.append((margin + 16, y + 18), title, font=bold, fontsize=11.5)
+            tws.write_text(page, color=ORANGE_DARK)
+            y += 36
 
-        def line(text, indent=8, size=10, color=DARK, is_bold=False, gap=15):
+        def line(text, indent=10, size=10, color=GRAPH, is_bold=False, gap=15):
             nonlocal y
             new_page_if_needed(gap + 2)
             twl = _fitz.TextWriter(page.rect)
@@ -4783,7 +4936,7 @@ class PrintingCalculator(QMainWindow):
         line(f"Всего страниц в источнике: {data['total_source']}")
         line(f"Количество экземпляров: {data['copies']}")
         line(f"Режим цветности: {data['color_mode']}")
-        y += 4
+        y += 6
 
         # ── Печать ──
         section("Печать (с учётом количества экземпляров)")
@@ -4798,49 +4951,71 @@ class PrintingCalculator(QMainWindow):
             for title, items in groups:
                 if not items:
                     continue
-                line(title + ":", indent=8, is_bold=True, color=GREY)
+                line(title + ":", indent=10, is_bold=True, color=ORANGE_DARK)
                 for it in items:
-                    line("• " + it, indent=20)
-            line(f"Итого страниц: {data['total_pages']}", is_bold=True, gap=18)
+                    line("•  " + it, indent=22)
+            # Итог в рамке
+            new_page_if_needed(30)
+            tot_rect = _fitz.Rect(margin, y - 2, margin + content_w, y + 22)
+            page.draw_rect(tot_rect, color=None, fill=ORANGE_SOFT, radius=0.12)
+            twp = _fitz.TextWriter(page.rect)
+            twp.append((margin + 12, y + 14), f"Итого страниц: {data['total_pages']}",
+                       font=bold, fontsize=11)
+            twp.write_text(page, color=ORANGE_DARK)
+            y += 32
         else:
             line("Нет данных")
-        y += 4
+        y += 6
 
         # ── Фальцовка ──
         if data["folding_type"]:
             section(f"Фальцовка под {data['folding_type']}")
             if data["folding_std"]:
-                line("Стандартные форматы:", is_bold=True, color=GREY)
+                line("Стандартные форматы:", is_bold=True, color=ORANGE_DARK)
                 for it in data["folding_std"]:
-                    line("• " + it, indent=20)
+                    line("•  " + it, indent=22)
             if data["folding_nonstd"]:
-                line("Нестандартные / рулонные форматы:", is_bold=True, color=GREY)
+                line("Нестандартные / рулонные форматы:", is_bold=True, color=ORANGE_DARK)
                 for it in data["folding_nonstd"]:
-                    line("• " + it, indent=20)
+                    line("•  " + it, indent=22)
             if not (data["folding_std"] or data["folding_nonstd"]):
                 line("Не требуется")
-            line(f"Итого листов: {data['folding_total']}", is_bold=True, gap=18)
-            y += 4
+            line(f"Итого листов: {data['folding_total']}", is_bold=True, gap=20, color=ORANGE_DARK)
+            y += 6
 
         # ── Брошюровка ──
         if data["binding_type"]:
             section(f"Брошюровка на пружину {data['binding_type']}")
             if data["binding_lines"]:
                 for it in data["binding_lines"]:
-                    line("• " + it, indent=20)
+                    line("•  " + it, indent=22)
             else:
                 line("Не требуется")
-            line(f"Итого брошюр: {data['binding_total']}", is_bold=True, gap=18)
-            y += 4
+            line(f"Итого брошюр: {data['binding_total']}", is_bold=True, gap=20, color=ORANGE_DARK)
+            y += 6
 
-        # ── Вес ──
-        new_page_if_needed(60)
-        card = _fitz.Rect(margin, y, pw - margin, y + 44)
-        page.draw_rect(card, color=BLUE, fill=BLUE_SOFT, width=1, radius=0.08)
+        # ── Итоговый вес: оранжевая карточка ──
+        new_page_if_needed(64)
+        card = _fitz.Rect(margin, y, margin + content_w, y + 52)
+        page.draw_rect(card, color=None, fill=ORANGE, radius=0.1)
         twt = _fitz.TextWriter(page.rect)
-        twt.append((margin + 14, y + 28), "Итоговый вес: ", font=bold, fontsize=13)
-        twt.append((margin + 118, y + 28), self._fw(data["weight"]), font=bold, fontsize=14)
-        twt.write_text(page, color=DARK)
+        twt.append((margin + 18, y + 32), "Итоговый вес: ", font=bold, fontsize=13)
+        twt.write_text(page, color=(1.0, 1.0, 1.0, 0.85) if False else WHITE)
+        twt2 = _fitz.TextWriter(page.rect)
+        twt2.append((margin + 150, y + 33), self._fw(data["weight"]), font=bold, fontsize=16)
+        twt2.write_text(page, color=WHITE)
+
+        # ── Подвал ──
+        foot_y = ph - 26
+        page.draw_line(_fitz.Point(margin, foot_y - 6),
+                       _fitz.Point(pw - margin, foot_y - 6),
+                       color=(0.85, 0.85, 0.86), width=0.8)
+        page.insert_textbox(
+            _fitz.Rect(margin, foot_y - 4, pw - margin, foot_y + 14),
+            "PDKopirka — калькулятор расчёта проектной документации",
+            fontname="helv", fontsize=8, color=GREY,
+            align=_fitz.TEXT_ALIGN_CENTER,
+        )
 
         doc.save(out_path, deflate=True)
         doc.close()
