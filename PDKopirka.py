@@ -804,6 +804,10 @@ def apply_update_and_restart(installer_path, latest_version="new"):
 # Диалог обновления
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Глобальная ссылка, чтобы Qt/Python не удаляли диалог обновления сборщиком мусора
+_update_dialog_ref = None
+
+
 class UpdateDialog(QDialog):
     def __init__(self, latest_version, download_url, parent=None):
         super().__init__(parent)
@@ -951,6 +955,7 @@ _CHANGELOG_HISTORY = [
                 "Проверка обновлений через latest.json (raw GitHub) — работает даже при исчерпанном лимите GitHub API",
                 "Несколько попыток и резервные адреса загрузки — обновление надёжнее на любых компьютерах",
                 "При ошибке загрузки обновления показывается конкретная причина",
+                "Исправлена критичная ошибка: окно обновления могло исчезать и обновление не запускалось",
                 "Диалог обновления не блокирует окно программы",
                 "Исправлено отображение версии при запуске из исходников",
                 "Попап «Что нового» — безрамочное окно со скруглёнными углами и тенью",
@@ -5232,10 +5237,14 @@ def _check_update_background():
 
 
 def _on_update_found(has_update, latest_ver, dl_url):
+    global _update_dialog_ref
     if has_update and latest_ver:
         _mark_update_attempt(latest_ver)
-        dlg = UpdateDialog(latest_ver, dl_url)
-        dlg.show()
+        # Держим ссылку, иначе диалог удаляется сборщиком мусора и обновление не скачивается
+        _update_dialog_ref = UpdateDialog(latest_ver, dl_url)
+        _update_dialog_ref.show()
+        _update_dialog_ref.raise_()
+        _update_dialog_ref.activateWindow()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
