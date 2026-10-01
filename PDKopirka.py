@@ -264,7 +264,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.3.8"
+APP_VERSION = "3.0.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -898,9 +898,14 @@ class UpdateDialog(QDialog):
 
 _CHANGELOG_HISTORY = [
     {
-        "version": "2.3.8",
-        "date": "30.09.2026",
+        "version": "3.0.0",
+        "date": "01.10.2026",
         "sections": [
+            ("👔 Менеджер", [
+                "Убрано отображение конвертаций в квадратных скобках (например, «[из A4x3: 14→7]») — не сбивает менеджера",
+                "Сам пересчёт форматов при этом сохраняется в расчёте",
+                "Метка «[заливка]» осталась",
+            ]),
             ("🎨 Новый дизайн", [
                 "Полностью обновлён интерфейс — современный стиль с синим акцентом, скруглениями и мягкими тенями",
                 "Вкладки переименованы: «Детализация», «Менеджер», «Клиент», «История», «Заливка»",
@@ -4709,10 +4714,7 @@ class PrintingCalculator(QMainWindow):
                         continue
                     suffix = " [заливка]" if has_fill else ""
                     line = f"{fmt} {kind} ({fw}×{fh} мм) — {t} стр.{suffix}"
-                    conv = di.get((fmt, kind, has_fill))
-                    if conv:
-                        parts = [f"из {s}: {sq}→{a}" for s, sq, a in conv]
-                        line += "  [" + ", ".join(parts) + "]"
+                    # Конвертации учитываются в расчёте, но не показываются менеджеру
                     pl.append(line)
                     tpp += t
         self.text_printing.setText("\n".join(pl) if pl else "Нет данных для печати")
