@@ -264,11 +264,16 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.3.6"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 UPDATE_LIST_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=5"
+# Манифест обновления: отдаётся raw-хостингом GitHub без лимитов API (в отличие от api.github.com)
+UPDATE_MANIFEST_URL = (
+    f"https://raw.githubusercontent.com/{UPDATE_REPO}/master/latest.json"
+)
+UPDATE_PAGE_URL = f"https://github.com/{UPDATE_REPO}/releases/latest"
 
 
 def _make_ssl_context_certifi():
@@ -555,11 +560,55 @@ def _fetch_json(url, timeout=5):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _fetch_manifest():
+    """Читает latest.json с raw-хостинга GitHub (без лимитов API).
+
+    Возвращает dict {version, url, notes} или None.
+    """
+    req = urllib.request.Request(UPDATE_MANIFEST_URL)
+    req.add_header("User-Agent", "PDKopirka-Updater/1.0")
+    req.add_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    req.add_header("Pragma", "no-cache")
+    # Кэш raw отдаёт ~5 минут, поэтому пробуем и с cache-busting параметром
+    try:
+        with _urlopen_safe(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8-sig", errors="replace"))
+        if isinstance(data, dict) and data.get("version"):
+            return data
+    except Exception:
+        pass
+    try:
+        sep = "&" if "?" in UPDATE_MANIFEST_URL else "?"
+        req2 = urllib.request.Request(f"{UPDATE_MANIFEST_URL}{sep}_={int(time.time())}")
+        req2.add_header("User-Agent", "PDKopirka-Updater/1.0")
+        with _urlopen_safe(req2, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8-sig", errors="replace"))
+        if isinstance(data, dict) and data.get("version"):
+            return data
+    except Exception:
+        pass
+    return None
+
+
 def check_for_update():
-    """Ищет установщик (.exe) в последнем релизе.
-    Сначала пробует /releases/latest, при ошибке — /releases?per_page=5."""
+    """Ищет обновление. Сначала — latest.json (raw, без лимитов API),
+    затем fallback на GitHub API (/releases/latest, затем список релизов)."""
     current = get_app_version()
     last_err = None
+
+    # Попытка 0: манифест latest.json (raw.githubusercontent.com, без лимитов)
+    try:
+        m = _fetch_manifest()
+        if m:
+            tag = str(m.get("version", "")).strip()
+            url = str(m.get("url", "")).strip()
+            if tag and url and _parse_version(tag) > _parse_version(current):
+                return True, tag, url, None
+            if tag and _parse_version(tag) <= _parse_version(current):
+                # Манифест доступен и новее нас нет — сразу выходим (без API)
+                return False, None, None, None
+    except Exception as e:
+        last_err = f"manifest: {type(e).__name__}: {e}"
 
     # Попытка 1: /releases/latest
     try:
@@ -597,8 +646,8 @@ def check_for_update():
     return False, None, None, last_err
 
 
-def download_update(url, target_path, progress_callback=None):
-    """Скачивает установщик .exe. Возвращает (True,) или (False, причина)."""
+def _download_once(url, target_path, progress_callback=None):
+    """Одна попытка скачивания. Возвращает (True,) или (False, причина, retryable)."""
     try:
         for old in [target_path, target_path + ".part"]:
             if os.path.exists(old):
@@ -632,14 +681,14 @@ def download_update(url, target_path, progress_callback=None):
                 os.remove(temp_path)
             except OSError:
                 pass
-            return (False, f"Размер не совпадает: скачано {downloaded} из {total_size} байт")
+            return (False, f"Размер не совпадает: скачано {downloaded} из {total_size} байт", True)
         size_mb = os.path.getsize(temp_path) / 1048576
         if os.path.getsize(temp_path) < 1024 * 100:
             try:
                 os.remove(temp_path)
             except OSError:
                 pass
-            return (False, f"Файл слишком мал: {size_mb:.1f} МБ")
+            return (False, f"Файл слишком мал: {size_mb:.1f} МБ", True)
         # Проверка MZ-сигнатуры (.exe)
         with open(temp_path, "rb") as f:
             magic = f.read(2)
@@ -648,13 +697,53 @@ def download_update(url, target_path, progress_callback=None):
                 os.remove(temp_path)
             except OSError:
                 pass
-            return (False, "Скачанный файл не является .exe (нет MZ-сигнатуры)")
-        if os.path.exists(target_path):
-            os.remove(target_path)
-        os.rename(temp_path, target_path)
-        return (True,)
+            return (False, "Скачанный файл не является .exe (нет MZ-сигнатуры)", False)
+        # Перемещаем готовый файл на место (с ретраем на случай блокировки антивирусом)
+        for attempt in range(5):
+            try:
+                if os.path.exists(target_path):
+                    os.remove(target_path)
+                os.rename(temp_path, target_path)
+                return (True,)
+            except OSError:
+                time.sleep(0.4)
+        return (False, "Не удалось сохранить установщик (файл занят)", True)
     except Exception as e:
-        return (False, f"{type(e).__name__}: {e}")
+        return (False, f"{type(e).__name__}: {e}", True)
+
+
+def download_update(url, target_path, progress_callback=None, version=None):
+    """Скачивает установщик .exe с несколькими попытками.
+
+    Пробует несколько URL (прямая ссылка на ассет, затем прямой asset-URL по
+    версии/тегу), делает до 3 попыток на каждый. Возвращает (True,) или (False, причина).
+    """
+    candidates = []
+    if url:
+        candidates.append(url)
+    ver = str(version or "").lstrip("v").strip()
+    if ver:
+        # Прямой asset-URL по тегу (на случай, если browser_download_url устарел)
+        candidates.append(
+            f"https://github.com/{UPDATE_REPO}/releases/download/"
+            f"{ver}/PDKopirka_Setup_{ver}.exe"
+        )
+    seen = set()
+    last_err = "Неизвестная ошибка"
+    for cand in candidates:
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        for attempt in range(3):
+            res = _download_once(cand, target_path, progress_callback)
+            if res[0]:
+                return (True,)
+            last_err = res[1] if len(res) > 1 else "Неизвестная ошибка"
+            retryable = res[2] if len(res) > 2 else True
+            if not retryable:
+                break
+            time.sleep(1.5)
+    return (False, last_err)
 
 
 def apply_update_and_restart(installer_path, latest_version="new"):
@@ -779,7 +868,8 @@ class UpdateDialog(QDialog):
 
         self.status_lbl.setText("Скачивание обновления...")
         QApplication.processEvents()
-        dl_result = download_update(self.download_url, new_installer, on_progress)
+        dl_result = download_update(self.download_url, new_installer, on_progress,
+                                    version=self.latest_version)
         if not dl_result[0]:
             err_msg = dl_result[1] if len(dl_result) > 1 else "Неизвестная ошибка"
             self.accept()
@@ -804,7 +894,7 @@ class UpdateDialog(QDialog):
 
 _CHANGELOG_HISTORY = [
     {
-        "version": "2.3.5",
+        "version": "2.3.6",
         "date": "30.09.2026",
         "sections": [
             ("🎨 Новый дизайн", [
@@ -858,6 +948,8 @@ _CHANGELOG_HISTORY = [
             ]),
             ("🔄 Обновления", [
                 "Автообновление с любой прошлой версии на новую (по GitHub Releases)",
+                "Проверка обновлений через latest.json (raw GitHub) — работает даже при исчерпанном лимите GitHub API",
+                "Несколько попыток и резервные адреса загрузки — обновление надёжнее на любых компьютерах",
                 "При ошибке загрузки обновления показывается конкретная причина",
                 "Диалог обновления не блокирует окно программы",
                 "Исправлено отображение версии при запуске из исходников",
@@ -5115,9 +5207,32 @@ class PrintingCalculator(QMainWindow):
         super().closeEvent(event)
 
 
+class _UpdateChecker(QThread):
+    """Фоновая проверка обновлений: не блокирует интерфейс."""
+
+    found = pyqtSignal(bool, str, str)
+
+    def run(self):
+        try:
+            has_update, latest_ver, dl_url, _err = check_for_update()
+        except Exception:
+            has_update, latest_ver, dl_url = False, None, None
+        self.found.emit(bool(has_update), latest_ver or "", dl_url or "")
+
+
+_update_checker_keepalive = []
+
+
 def _check_update_background():
-    has_update, latest_ver, dl_url, _upd_err = check_for_update()
-    if has_update:
+    checker = _UpdateChecker()
+    checker.found.connect(lambda h, v, u: _on_update_found(h, v, u))
+    checker.found.connect(lambda *_: checker.deleteLater())
+    _update_checker_keepalive.append(checker)
+    checker.start()
+
+
+def _on_update_found(has_update, latest_ver, dl_url):
+    if has_update and latest_ver:
         _mark_update_attempt(latest_ver)
         dlg = UpdateDialog(latest_ver, dl_url)
         dlg.show()
@@ -5127,6 +5242,38 @@ def _check_update_background():
 # Точка входа
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _LicenseChecker(QThread):
+    """Фоновая проверка лицензии: не задерживает запуск программы."""
+
+    result_ready = pyqtSignal(bool, str)
+
+    def __init__(self, window, app):
+        super().__init__(window)
+        self._window = window
+        self._app = app
+        self.result_ready.connect(self._on_result)
+
+    def run(self):
+        try:
+            ok, msg = check_remote_license()
+        except Exception as e:
+            ok, msg = True, str(e)   # fail-open при сбое
+        self.result_ready.emit(ok, msg)
+
+    def _on_result(self, ok, msg):
+        if not ok:
+            try:
+                self._window.close()
+            except Exception:
+                pass
+            QMessageBox.critical(None, "Доступ запрещён", msg)
+            self._app.exit(1)
+            return
+        if getattr(sys, "frozen", False):
+            _clear_update_settings_if_current()
+            QTimer.singleShot(800, lambda: _check_update_background())
+
+
 def main():
     app = QApplication(sys.argv)
     force_light_palette(app)
@@ -5135,23 +5282,14 @@ def main():
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
-    # Проверка лицензии через Gist (ACTIVE / BLOCKED)
-    ok, msg = check_remote_license()
-    if not ok:
-        QMessageBox.critical(None, "Доступ запрещён", msg)
-        sys.exit(1)
-
     _create_single_instance_mutex()
 
-    # Главное окно
+    # Главное окно показываем сразу — запуск быстрый, без ожидания сети
     window = PrintingCalculator()
     window.show()
 
-    # Проверка обновлений после показа окна (не блокирует запуск)
-    if getattr(sys, "frozen", False):
-        _clear_update_settings_if_current()
-        QTimer.singleShot(1000, lambda: _check_update_background())
-
+    # Проверка лицензии — в фоне, не задерживает запуск
+    _LicenseChecker(window, app).start()
     sys.exit(app.exec())
 
 
