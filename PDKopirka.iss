@@ -4,7 +4,7 @@
 ; ============================================================================
 
 #define MyAppName "PDKopirka"
-#define MyAppVersion "2.3.7"
+#define MyAppVersion "2.3.8"
 #define MyAppPublisher "PDKopirka"
 #define MyAppExeName "PDKopirka.exe"
 #define MyAppURL "https://github.com/fabilya/PDKopirka"
