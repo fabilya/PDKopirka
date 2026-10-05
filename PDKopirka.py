@@ -264,7 +264,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.1"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -898,7 +898,7 @@ class UpdateDialog(QDialog):
 
 _CHANGELOG_HISTORY = [
     {
-        "version": "3.0.0",
+        "version": "3.0.1",
         "date": "01.10.2026",
         "sections": [
             ("👔 Менеджер", [
@@ -1136,84 +1136,156 @@ class WhatsNewDialog(QDialog):
 
 
 class DonateDialog(QDialog):
-    """Поддержка проекта: только QR-код для перевода через СБП."""
+    """Поддержка проекта: перевод по номеру телефона в Сбербанк / Озон Банк."""
 
-    QR_PATH = "assets/donate_qr.png"
     PHONE = "+7 901 360-06-42"
+    PHONE_DIGITS = "+79013600642"
+    RECIPIENT = "Илья Ф."
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Поддержать проект")
-        self.setFixedSize(460, 700)
+        self.setFixedSize(470, 620)
         self.setModal(True)
+        self._copied_reset = None
         self._build_ui()
+
+    def mousePressEvent(self, e):
+        # Клик по карточке с номером копирует его
+        if self.phone_card is not None:
+            local = self.phone_card.mapFrom(self, e.pos())
+            if self.phone_card.rect().contains(local):
+                self._copy_phone()
+        super().mousePressEvent(e)
+
+    def _copy_phone(self):
+        QApplication.clipboard().setText(self.PHONE_DIGITS)
+        self._show_copied_feedback()
+
+    def _show_copied_feedback(self):
+        """Подпись под номером на пару секунд превращается в «Скопировано»."""
+        lbl = self.phone_hint
+        if lbl is None:
+            return
+        if self._copied_reset is not None:
+            self._copied_reset.stop()
+        lbl.setText("✓  Номер скопирован")
+        lbl.setStyleSheet(
+            f"color:{THEME['success_text']};background:transparent;font-size:12px;font-weight:600;"
+        )
+        self._copied_reset = QTimer(self)
+        self._copied_reset.setSingleShot(True)
+        self._copied_reset.timeout.connect(self._reset_copy_hint)
+        self._copied_reset.start(1400)
+
+    def _reset_copy_hint(self):
+        lbl = self.phone_hint
+        if lbl is None:
+            return
+        lbl.setText("Нажмите на номер, чтобы скопировать")
+        lbl.setStyleSheet(f"color:{THEME['text_faint']};background:transparent;font-size:12px;")
+
+    def _funding_row(self, emoji, title, subtitle):
+        row = QHBoxLayout(); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(12)
+        ic = QLabel(emoji)
+        ic.setFixedSize(34, 34)
+        ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ic.setStyleSheet(
+            f"background:{THEME['primary_soft']};border-radius:17px;font-size:16px;"
+        )
+        ic.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        row.addWidget(ic, alignment=Qt.AlignmentFlag.AlignTop)
+        col = QVBoxLayout(); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(0)
+        tt = QLabel(title)
+        tt.setStyleSheet(f"color:{THEME['text']};background:transparent;font-size:14px;font-weight:600;")
+        col.addWidget(tt)
+        ss = QLabel(subtitle)
+        ss.setWordWrap(True)
+        ss.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:12px;")
+        col.addWidget(ss)
+        row.addLayout(col, stretch=1)
+        return row
 
     def _build_ui(self):
         self.setStyleSheet(f"QDialog {{ background-color: {THEME['bg']}; color: {THEME['text']}; }}")
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+        self.phone_card = None
+        self.phone_hint = None
 
+        # Шапка: тёмный градиент для контрастного белого текста
         header = QFrame()
         header.setStyleSheet(
-            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            "stop:0 #34C759, stop:1 #00C2FF);border:none;}"
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #0A4FB0, stop:1 #1479E8);border:none;}"
         )
-        hl = QVBoxLayout(header); hl.setContentsMargins(24, 20, 24, 20); hl.setSpacing(2)
+        hl = QVBoxLayout(header); hl.setContentsMargins(26, 22, 26, 22); hl.setSpacing(6)
         t = QLabel("❤️  Поддержать проект")
-        t.setFont(QFont("Segoe UI Variable Display", 19, QFont.Weight.Bold))
+        t.setFont(QFont("Segoe UI Variable Display", 20, QFont.Weight.Bold))
         t.setStyleSheet("color:#FFFFFF;background:transparent;")
         hl.addWidget(t)
-        s = QLabel("Ваш вклад идёт на развитие PDKopirka: новые функции и улучшения")
-        s.setStyleSheet("color:rgba(255,255,255,0.9);background:transparent;font-size:12px;")
+        s = QLabel(
+            "PDKopirka развивается благодаря вам.\n"
+            "Ваша поддержка идёт на новые функции и улучшения."
+        )
+        s.setFont(QFont("Segoe UI Variable Text", 13))
+        s.setStyleSheet("color:#EAF2FF;background:transparent;")
         s.setWordWrap(True)
         hl.addWidget(s)
         root.addWidget(header)
 
-        body = QWidget(); lay = QVBoxLayout(body); lay.setContentsMargins(22, 18, 22, 20); lay.setSpacing(12)
+        body = QWidget(); lay = QVBoxLayout(body); lay.setContentsMargins(22, 18, 22, 20); lay.setSpacing(14)
 
-        # Главный акцент: сканировать QR именно в приложении банка
-        callout = QFrame()
-        callout.setStyleSheet(
-            f"QFrame{{background:{THEME['warning_soft']};border:none;"
-            f"border-radius:{THEME['r_md']};}}"
-        )
-        cl = QHBoxLayout(callout); cl.setContentsMargins(14, 12, 14, 12); cl.setSpacing(10)
-        icon = QLabel("📱")
-        icon.setStyleSheet("background:transparent;font-size:24px;")
-        icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        cl.addWidget(icon, alignment=Qt.AlignmentFlag.AlignTop)
-        ctext = QLabel(
-            "<b>Важно: отсканируйте QR камерой в приложении банка</b><br>"
-            "<span>Откройте приложение банка на телефоне → «Оплата по QR» и наведите камеру.</span>"
-        )
-        ctext.setTextFormat(Qt.TextFormat.RichText)
-        ctext.setWordWrap(True)
-        ctext.setStyleSheet(f"color:{THEME['warning_text']};background:transparent;font-size:12px;")
-        cl.addWidget(ctext, stretch=1)
-        lay.addWidget(callout)
-
-        qr_frame = QFrame(); qr_frame.setObjectName("Card")
-        qr_frame.setStyleSheet(
-            f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+        # На что пойдёт поддержка
+        fund_card = QFrame(objectName="FundCard")
+        fund_card.setStyleSheet(
+            f"QFrame#FundCard{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
             f"border-radius:{THEME['r_lg']};}}"
         )
-        qfl = QVBoxLayout(qr_frame); qfl.setContentsMargins(16, 16, 16, 16); qfl.setSpacing(8)
-        self.qr_label = QLabel()
-        self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        pix = QPixmap(resource_path(self.QR_PATH))
-        if not pix.isNull():
-            self.qr_label.setPixmap(pix.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        else:
-            self.qr_label.setText("QR-код не найден")
-            self.qr_label.setStyleSheet(f"color:{THEME['danger']};background:transparent;")
-        qfl.addWidget(self.qr_label)
-        qr_frame.setMaximumWidth(360)
-        lay.addWidget(qr_frame, alignment=Qt.AlignmentFlag.AlignHCenter)
+        fcl = QVBoxLayout(fund_card); fcl.setContentsMargins(18, 16, 18, 16); fcl.setSpacing(12)
+        fund_title = QLabel("На что пойдёт поддержка")
+        fund_title.setFont(QFont("Segoe UI Variable Display", 15, QFont.Weight.DemiBold))
+        fund_title.setStyleSheet(f"color:{THEME['text']};background:transparent;")
+        fcl.addWidget(fund_title)
+        fcl.addLayout(self._funding_row("🚀", "Новые функции", "Печать, форматы, отчёты и вкладки"))
+        fcl.addLayout(self._funding_row("🐞", "Исправление ошибок", "Стабильность и корректный расчёт"))
+        fcl.addLayout(self._funding_row("⚡", "Ускорение обработки", "Быстрый анализ больших PDF"))
+        lay.addWidget(fund_card)
 
-        phone_lbl = QLabel(f"Получатель: <b style='color:{THEME['primary']};'>{self.PHONE}</b>")
-        phone_lbl.setTextFormat(Qt.TextFormat.RichText)
+        # Карточка с номером (клик = копировать)
+        phone_card = QFrame(objectName="PhoneCard")
+        phone_card.setCursor(Qt.CursorShape.PointingHandCursor)
+        phone_card.setStyleSheet(
+            f"QFrame#PhoneCard{{background:{THEME['primary_soft']};border:1px solid {THEME['primary_border']};"
+            f"border-radius:{THEME['r_lg']};}}"
+        )
+        pcl = QVBoxLayout(phone_card); pcl.setContentsMargins(20, 14, 20, 14); pcl.setSpacing(3)
+        card_badge = QLabel("💳  Перевод по номеру телефона")
+        card_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_badge.setStyleSheet(f"color:{THEME['primary_text']};background:transparent;font-size:12px;font-weight:600;")
+        card_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pcl.addWidget(card_badge)
+        phone_lbl = QLabel(self.PHONE)
+        phone_lbl.setFont(QFont("Segoe UI Variable Display", 21, QFont.Weight.Bold))
         phone_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        phone_lbl.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:13px;")
-        lay.addWidget(phone_lbl)
+        phone_lbl.setStyleSheet(f"color:{THEME['primary_text']};background:transparent;")
+        phone_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pcl.addWidget(phone_lbl)
+        banks_lbl = QLabel("Сбербанк · Озон Банк · Получатель: <b>Илья Ф.</b>")
+        banks_lbl.setTextFormat(Qt.TextFormat.RichText)
+        banks_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        banks_lbl.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:12px;")
+        banks_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pcl.addWidget(banks_lbl)
+        phone_hint = QLabel("Нажмите на номер, чтобы скопировать")
+        phone_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        phone_hint.setStyleSheet(f"color:{THEME['text_faint']};background:transparent;font-size:12px;")
+        phone_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        pcl.addWidget(phone_hint)
+        phone_card.setMaximumWidth(380)
+        self.phone_card = phone_card
+        self.phone_hint = phone_hint
+        lay.addWidget(phone_card, alignment=Qt.AlignmentFlag.AlignHCenter)
+
         lay.addStretch()
         root.addWidget(body, stretch=1)
 
