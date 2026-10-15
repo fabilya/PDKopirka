@@ -3,6 +3,7 @@ import sys
 import time
 import io
 import math
+import threading
 import hmac
 import hashlib
 import random
@@ -264,7 +265,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "3.0.1"
+APP_VERSION = "3.1.0"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -898,6 +899,22 @@ class UpdateDialog(QDialog):
 
 _CHANGELOG_HISTORY = [
     {
+        "version": "3.1.0",
+        "date": "15.10.2026",
+        "sections": [
+            ("📄 Конвертация Word → PDF", [
+                "Новая кнопка «Конвертировать Word → PDF» на вкладке «Параметры», под статусом анализа",
+                "Пакетная конвертация файлов .doc и .docx в PDF — выбирается папка (с вложенными подпапками) или отдельные файлы",
+                "PDF сохраняется рядом с исходным файлом, с тем же именем",
+                "Отдельное окно конвертации: свой выбор файлов, список, прогресс, статус и список ошибок",
+                "Ошибка на одном файле не останавливает остальные — проблемные попадают в отчёт об ошибках",
+                "Конвертация выполняется через установленный Microsoft Word — точность вёрстки 100%",
+                "Если Microsoft Word не установлен — кнопка неактивна с подсказкой, программа работает как обычно",
+                "Программа остаётся автономной: работа с PDF, анализ и расчёты не требуют Word",
+            ]),
+        ],
+    },
+    {
         "version": "3.0.1",
         "date": "01.10.2026",
         "sections": [
@@ -1420,6 +1437,12 @@ FMT_ORDER = ["A4", "A3", "A2", "A1", "A0"]
 KIND_ORDER = ["ч/б", "цвет"]
 FILL_MIN_RATIO = 0.50
 PAGE_ANALYSIS_DPI = 200
+
+# MuPDF (PyMuPDF) рендерит страницы не потокобезопасно: одновременный вызов
+# get_pixmap() из нескольких потоков приводит к падению процесса с нарушением
+# доступа в mupdfcpp64.dll (0xC0000005). Рендеринг сериализуем этим замком,
+# а обработку пикселей (numpy) оставляем параллельной.
+_MUPDF_RENDER_LOCK = threading.Lock()
 
 CUTTING_FORMATS = {
     "A4x3", "A4x5", "A4x6", "A4x7", "A4x8", "A4x9",
@@ -2750,17 +2773,22 @@ class AnalysisThread(QThread):
         """
         try:
             scale = PAGE_ANALYSIS_DPI / 72
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
-            )
+            # get_pixmap() в MuPDF не потокобезопасен — рендерим под замком и
+            # сразу копируем пиксели, чтобы дальше считать их параллельно.
+            with _MUPDF_RENDER_LOCK:
+                pix = page.get_pixmap(
+                    matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False
+                )
+                samples = bytes(pix.samples); pn = pix.n
+                ph = pix.height; pw = pix.width
             # Читаем пиксели напрямую (без PNG-энкода и PIL) — примерно в 2 раза быстрее.
-            a = np.frombuffer(pix.samples, dtype=np.uint8)
-            if pix.n == 3:
-                a = a.reshape(pix.height, pix.width, 3)
-            elif pix.n == 4:
-                a = a.reshape(pix.height, pix.width, 4)[..., :3]
+            a = np.frombuffer(samples, dtype=np.uint8)
+            if pn == 3:
+                a = a.reshape(ph, pw, 3)
+            elif pn == 4:
+                a = a.reshape(ph, pw, 4)[..., :3]
             else:
-                a = a.reshape(pix.height, pix.width, pix.n)[..., :3]
+                a = a.reshape(ph, pw, pn)[..., :3]
             if a.ndim != 3:
                 return (False, 0.0, 0.0)
             r = a[..., 0].astype(np.int16)
@@ -2944,6 +2972,291 @@ class AnalysisThread(QThread):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Конвертация Word → PDF (через COM Microsoft Word)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Кэш результата проверки наличия Word на время сеанса (Dispatch поднимает COM,
+# поэтому дёргаем его один раз, а не при каждом клике).
+_WORD_AVAILABLE_CACHE = None
+
+
+def _word_available():
+    """True, если установлен Microsoft Word и доступен через COM.
+
+    Результат кэшируется на время сеанса. Импорт win32com выполняется здесь,
+    а не на уровне модуля: там, где pywin32 нет, программа всё равно запустится.
+    """
+    global _WORD_AVAILABLE_CACHE
+    if _WORD_AVAILABLE_CACHE is not None:
+        return _WORD_AVAILABLE_CACHE
+    available = False
+    try:
+        import pythoncom
+        import win32com.client
+        pythoncom.CoInitialize()
+        try:
+            app = win32com.client.Dispatch("Word.Application")
+            try:
+                app.Quit()
+            except Exception:
+                pass
+            available = True
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+    except Exception:
+        available = False
+    _WORD_AVAILABLE_CACHE = available
+    return available
+
+
+RPC_E_CALL_REJECTED = -2147418111  # 0x8001010A
+RPC_RETRY_LIMIT = 5                # число повторов одного COM-вызова при RPC_E
+RPC_RETRY_DELAY = 0.7              # пауза между повторами, сек
+RPC_REJECT_LIMIT = 3               # серия RPC_E подряд → пересоздание Word
+
+
+def _unblock_file(path):
+    """Снимает NTFS-поток Zone.Identifier («метку интернета») с файла.
+
+    Никогда не бросает исключений: отсутствие потока или прав — не ошибка
+    (тогда сработают повторы и пересоздание экземпляра Word).
+    Возвращает True, если поток удалось удалить.
+    """
+    stream_path = path + ":Zone.Identifier"
+    try:
+        import win32file
+        try:
+            win32file.DeleteFile(stream_path)
+            return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        import ctypes
+        if ctypes.windll.kernel32.DeleteFileW(ctypes.c_wchar_p(stream_path)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _collect_word_files(paths):
+    """Собирает *.doc/*.docx из переданных файлов и папок (папки — рекурсивно).
+
+    Игнорирует временные файлы блокировки Word (`~$...`).
+    """
+    result = []
+    seen = set()
+
+    def _add(path):
+        if path not in seen:
+            seen.add(path)
+            result.append(path)
+
+    for p in paths or []:
+        if os.path.isdir(p):
+            for root_dir, _, files in os.walk(p):
+                for f in files:
+                    if f.startswith("~$"):
+                        continue
+                    if f.lower().endswith((".doc", ".docx")):
+                        _add(os.path.join(root_dir, f))
+        elif os.path.isfile(p):
+            if os.path.basename(p).startswith("~$"):
+                continue
+            if p.lower().endswith((".doc", ".docx")):
+                _add(p)
+    return result
+
+
+class WordConvertThread(QThread):
+    """Пакетная конвертация Word-файлов в PDF через COM Microsoft Word."""
+
+    progress    = pyqtSignal(int)
+    status      = pyqtSignal(str)
+    finished_ok = pyqtSignal(int, int, list)
+    error       = pyqtSignal(str)
+    stopped     = pyqtSignal()
+
+    def __init__(self, files):
+        super().__init__()
+        self.files = list(files)
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        # COM в фоновом потоке требует инициализации именно в этом потоке.
+        try:
+            import pythoncom
+            import win32com.client
+        except Exception as e:
+            self.error.emit(f"Модуль pywin32 не найден: {e}")
+            return
+        pythoncom.CoInitialize()
+        word = None
+        ok = 0
+        errors = []
+        total = len(self.files)
+        consecutive_rpc = 0
+        retry_later = []
+
+        def _open_word():
+            # DispatchEx создаёт ОТДЕЛЬНЫЙ процесс Word. Обычный Dispatch
+            # присоединяется к уже запущенному экземпляру (залипшему/чужому),
+            # из-за чего «пересоздание» не давало свежий Word и вся партия
+            # падала с RPC_E_CALL_REJECTED / AttributeError('Open.SaveAs').
+            try:
+                app = win32com.client.DispatchEx("Word.Application")
+            except Exception:
+                app = win32com.client.Dispatch("Word.Application")
+            try:
+                app.Visible = False
+            except Exception:
+                pass
+            try:
+                app.DisplayAlerts = 0
+            except Exception:
+                pass
+            try:
+                # Отключает макросы автоматизации (иначе всплывают модальные
+                # предупреждения безопасности и Word перестаёт отвечать на COM).
+                app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable
+            except Exception:
+                pass
+            return app
+
+        def _is_dead_instance(exc):
+            """Экземпляр Word мёртв/не обслуживает COM (не ошибка конкретного файла)."""
+            if _is_rpc_rejected(exc):
+                return True
+            # pywin32 dynamic dispatch на залипшем экземпляре теряет методы
+            # и бросает AttributeError('Open.SaveAs') вместо com_error.
+            return isinstance(exc, AttributeError)
+
+        def _is_rpc_rejected(exc):
+            return bool(getattr(exc, "args", None)) and \
+                exc.args[0] == RPC_E_CALL_REJECTED
+
+        def _call(fn, *a, **kw):
+            """Вызов COM-метода с повторами только на RPC_E_CALL_REJECTED."""
+            attempts = 0
+            while True:
+                try:
+                    return fn(*a, **kw)
+                except Exception as e:
+                    if not _is_rpc_rejected(e) or attempts >= RPC_RETRY_LIMIT:
+                        raise
+                    attempts += 1
+                    if self._stop_requested:
+                        raise
+                    time.sleep(RPC_RETRY_DELAY)
+
+        def _convert_one(app, src):
+            doc = None
+            try:
+                doc = _call(
+                    app.Documents.Open,
+                    src, ReadOnly=True, AddToRecentFiles=False, Visible=False
+                )
+                out_pdf = os.path.splitext(src)[0] + ".pdf"
+                _call(doc.SaveAs, out_pdf, FileFormat=17)  # 17 = wdFormatPDF
+            finally:
+                if doc is not None:
+                    try:
+                        doc.Close(SaveChanges=False)
+                    except Exception:
+                        pass
+
+        try:
+            # Снимаем «метку интернета» со всей партии до открытия в Word:
+            # иначе Protected View ломает автоматизацию (каскад RPC_E_CALL_REJECTED).
+            for src in self.files:
+                _unblock_file(src)
+
+            word = _open_word()
+            for i, src in enumerate(self.files):
+                if self._stop_requested:
+                    break
+                name = os.path.basename(src)
+                self.status.emit(f"Конвертация: {name} ({i + 1}/{total})")
+                try:
+                    _convert_one(word, src)
+                    ok += 1
+                    consecutive_rpc = 0
+                except Exception as e:
+                    if _is_dead_instance(e):
+                        # Залипший экземпляр Word: не пишем в errors сразу,
+                        # даём шанс после пересоздания Word.
+                        consecutive_rpc += 1
+                        retry_later.append(src)
+                        if consecutive_rpc >= RPC_REJECT_LIMIT:
+                            try:
+                                word.Quit()
+                            except Exception:
+                                pass
+                            word = _open_word()
+                            consecutive_rpc = 0
+                    else:
+                        errors.append(f"{name}: {e}")
+                        consecutive_rpc = 0
+                self.progress.emit(int(100 * (i + 1) / total))
+
+            # Второй проход по «отложенным»: Word уже пересоздан.
+            # Серия пересозданий ограничена, чтобы не зациклиться на битых файлах.
+            if retry_later and not self._stop_requested:
+                second_pass_recreates = 0
+                for src in retry_later:
+                    if self._stop_requested:
+                        break
+                    name = os.path.basename(src)
+                    self.status.emit(f"Повтор: {name}")
+                    try:
+                        _convert_one(word, src)
+                        ok += 1
+                    except Exception as e:
+                        if (not _is_dead_instance(e)
+                                or second_pass_recreates >= RPC_REJECT_LIMIT):
+                            errors.append(f"{name}: {e}")
+                            continue
+                        # Экземпляр снова мёртв — пересоздаём и пробуем ещё раз.
+                        second_pass_recreates += 1
+                        try:
+                            word.Quit()
+                        except Exception:
+                            pass
+                        word = _open_word()
+                        try:
+                            _convert_one(word, src)
+                            ok += 1
+                        except Exception as e2:
+                            errors.append(f"{name}: {e2}")
+        except Exception as e:
+            self.error.emit(str(e))
+            return
+        finally:
+            # Гарантированно закрываем Word, иначе останется процесс WINWORD.exe.
+            if word is not None:
+                try:
+                    word.Quit()
+                except Exception:
+                    pass
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
+        if self._stop_requested:
+            self.stopped.emit()
+        else:
+            self.finished_ok.emit(ok, len(errors), errors)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Главное окно
 # ─────────────────────────────────────────────────────────────────────────────
 class DropArea(QFrame):
@@ -3113,15 +3426,21 @@ class DropArea(QFrame):
 
 class PathPickerDialog(QDialog):
     """Проводник в стиле программы: быстрый доступ слева, адресная строка,
-    выбор папки или одного/нескольких PDF.
+    выбор папки или одного/нескольких файлов (PDF — по умолчанию, либо Word).
 
     Открывается в папке «Загрузки». В адресную строку можно вручную вписать
     путь к папке или файлу и нажать Enter.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, file_filter="pdf"):
         super().__init__(parent)
-        self.setWindowTitle("Выбор папки или PDF файлов")
+        # file_filter: "pdf" — только PDF, "word" — только .doc/.docx
+        self._file_filter = file_filter or "pdf"
+        if self._file_filter == "word":
+            self._exts = (".doc", ".docx"); self._file_kind = "word"; self._filter_label = "Word"
+        else:
+            self._exts = (".pdf",); self._file_kind = "pdf"; self._filter_label = "PDF"
+        self.setWindowTitle(f"Выбор папки или {self._filter_label} файлов")
         self.resize(860, 600)
         self._cwd = self._default_dir()
         self._history = []
@@ -3194,7 +3513,7 @@ class PathPickerDialog(QDialog):
         body.addWidget(self.table, stretch=1)
         root.addLayout(body, stretch=1)
 
-        self.hint = QLabel("Двойной клик по папке — войти. Выберите папку или один/несколько PDF (Ctrl/Shift) и нажмите «Выбрать».")
+        self.hint = QLabel(f"Двойной клик по папке — войти. Выберите папку или один/несколько {self._filter_label} (Ctrl/Shift) и нажмите «Выбрать».")
         self.hint.setStyleSheet(f"color:{THEME['text_muted']};font-size:12px;background:transparent;")
         self.hint.setWordWrap(True)
         root.addWidget(self.hint)
@@ -3306,14 +3625,16 @@ class PathPickerDialog(QDialog):
             p.drawLine(6, 5, 10, 1)
             p.drawLine(10, 1, 14, 5)
         else:
+            # "word" — синий документ с «W», остальные — красный PDF
+            is_word = kind == "word"
             doc = QPainterPath()
             doc.addRoundedRect(2, 1, 16, 18, 2.5, 2.5)
-            p.fillPath(doc, QColor("#E5484D"))
+            p.fillPath(doc, QColor("#2B579A") if is_word else QColor("#E5484D"))
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor("#FFFFFF"))
             f = QFont("Segoe UI", 6, QFont.Weight.Bold)
             p.setFont(f)
-            p.drawText(px.rect(), int(Qt.AlignmentFlag.AlignCenter), "PDF")
+            p.drawText(px.rect(), int(Qt.AlignmentFlag.AlignCenter), "W" if is_word else "PDF")
         p.end()
         self._icon_cache[key] = QIcon(px)
         return self._icon_cache[key]
@@ -3342,8 +3663,8 @@ class PathPickerDialog(QDialog):
                 mtime = 0
             if os.path.isdir(full):
                 self._rows.append({"kind": "dir", "path": full, "name": name, "mtime": mtime})
-            elif name.lower().endswith(".pdf"):
-                self._rows.append({"kind": "pdf", "path": full, "name": name, "mtime": mtime})
+            elif name.lower().endswith(self._exts):
+                self._rows.append({"kind": self._file_kind, "path": full, "name": name, "mtime": mtime})
         self._refresh_highlight = highlight
         self._populate_table()
 
@@ -3361,7 +3682,7 @@ class PathPickerDialog(QDialog):
         # «..» и папки держим сверху независимо от направления
         ups = [r for r in rows if r["kind"] == "up"]
         dirs = [r for r in rows if r["kind"] == "dir"]
-        pdfs = [r for r in rows if r["kind"] == "pdf"]
+        pdfs = [r for r in rows if r["kind"] in ("pdf", "word")]
         rows = ups + dirs + pdfs
 
         self.table.setRowCount(0)
@@ -3374,7 +3695,7 @@ class PathPickerDialog(QDialog):
             if r["kind"] == "up":
                 f = name_item.font(); f.setBold(True); name_item.setFont(f)
             self.table.setItem(i, 0, name_item)
-            if r["kind"] == "pdf":
+            if r["kind"] in ("pdf", "word"):
                 dt = datetime.fromtimestamp(r["mtime"]).strftime("%d.%m.%Y %H:%M") if r["mtime"] else "—"
             else:
                 dt = "—"
@@ -3386,7 +3707,7 @@ class PathPickerDialog(QDialog):
         if highlight:
             self.hint.setText("Файл найден и выделен — нажмите «Выбрать».")
         elif not rows:
-            self.hint.setText("Папка пуста или нет доступных PDF. Поднимитесь выше.")
+            self.hint.setText(f"Папка пуста или нет доступных {self._filter_label}. Поднимитесь выше.")
 
     def _go_up(self):
         """«Назад» — подняться ровно на один уровень выше."""
@@ -3423,7 +3744,7 @@ class PathPickerDialog(QDialog):
         kind, path = cell.data(Qt.ItemDataRole.UserRole)
         if kind in ("dir", "up"):
             self._navigate_to(path)
-        elif kind == "pdf":
+        elif kind in ("pdf", "word"):
             self._selected_files = [path]
             self.accept()
 
@@ -3447,7 +3768,7 @@ class PathPickerDialog(QDialog):
             if cell is None:
                 continue
             kind, path = cell.data(Qt.ItemDataRole.UserRole)
-            if kind == "pdf":
+            if kind == self._file_kind:
                 files.append(path)
         return files
 
@@ -3485,6 +3806,265 @@ class PathPickerDialog(QDialog):
 
     def selected_paths(self):
         return list(self._selected_files)
+
+
+def _plural_ru(n, one, few, many):
+    """Русская форма множественного числа для счётчиков («1 файл», «2 файла»)."""
+    n = abs(int(n))
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+class WordConverterDialog(QDialog):
+    """Модальный самодостаточный попап конвертации Word → PDF.
+
+    Весь функционал (выбор файлов, прогресс, список ошибок, отмена) живёт
+    внутри диалога и не затрагивает статус/прогресс анализа главного окна.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Конвертация Word → PDF")
+        self.setModal(True)
+        self.setFixedWidth(560)
+        self.setStyleSheet(f"QDialog{{background:{THEME['bg']};color:{THEME['text']};}}")
+        self._thread = None
+        self._files = []
+        self._running = False
+        self._build_ui()
+
+    def _build_ui(self):
+        card_qss = (
+            f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+            f"border-radius:{THEME['r_lg']};}}"
+        )
+        root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 18); root.setSpacing(12)
+
+        title = QLabel("📄  Конвертация Word → PDF")
+        title.setFont(QFont("Segoe UI Variable Display", 16, QFont.Weight.Bold))
+        title.setStyleSheet(f"color:{THEME['text']};background:transparent;")
+        root.addWidget(title)
+
+        note = QLabel("PDF сохраняется рядом с исходным файлом.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:12px;")
+        root.addWidget(note)
+
+        # Карточка выбора файлов
+        pick_card = QFrame(); pick_card.setObjectName("Card"); pick_card.setStyleSheet(card_qss)
+        pcl = QVBoxLayout(pick_card); pcl.setContentsMargins(16, 14, 16, 14); pcl.setSpacing(10)
+
+        self.btn_pick = QPushButton("📂  Выбрать файлы…")
+        self.btn_pick.setMinimumHeight(42)
+        self.btn_pick.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pick.setStyleSheet(_qss_button("tonal"))
+        self.btn_pick.clicked.connect(self._pick_files)
+        pcl.addWidget(self.btn_pick)
+
+        self.lbl_count = QLabel("Файлы не выбраны")
+        self.lbl_count.setStyleSheet(
+            f"color:{THEME['text_muted']};background:transparent;font-size:12px;"
+        )
+        self.lbl_count.setWordWrap(True)
+        pcl.addWidget(self.lbl_count)
+
+        self.list_files = QListWidget()
+        self.list_files.setFixedHeight(120)
+        self.list_files.setVisible(False)
+        self.list_files.setStyleSheet(
+            f"QListWidget{{background-color:{THEME['surface_alt']};color:{THEME['text']};"
+            f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};outline:none;padding:4px;}}"
+            f"QListWidget::item{{padding:4px 6px;}}"
+        )
+        pcl.addWidget(self.list_files)
+        root.addWidget(pick_card)
+
+        # Карточка прогресса и статуса
+        prog_card = QFrame(); prog_card.setObjectName("Card"); prog_card.setStyleSheet(card_qss)
+        pgl = QVBoxLayout(prog_card); pgl.setContentsMargins(16, 14, 16, 14); pgl.setSpacing(10)
+
+        self.progress_bar = QProgressBar(); self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet(
+            f"QProgressBar{{border:none;border-radius:5px;text-align:center;height:10px;"
+            f"color:transparent;background-color:{THEME['surface_high']};}}"
+            f"QProgressBar::chunk{{border-radius:5px;"
+            f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f"stop:0 #0A84FF, stop:1 #00C2FF);}}"
+        )
+        pgl.addWidget(self.progress_bar)
+
+        self.lbl_status = QLabel("Готово к конвертации")
+        self.lbl_status.setStyleSheet(
+            f"color:{THEME['text']};background:transparent;font-size:14px;font-weight:600;"
+        )
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.lbl_status.setMinimumWidth(0)
+        pgl.addWidget(self.lbl_status)
+        root.addWidget(prog_card)
+
+        # Область ошибок — скрыта до завершения
+        self.errors = QTextEdit()
+        self.errors.setReadOnly(True)
+        self.errors.setFixedHeight(110)
+        self.errors.setVisible(False)
+        self.errors.setStyleSheet(
+            f"QTextEdit{{background-color:{THEME['danger_soft']};color:{THEME['danger_text']};"
+            f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};"
+            f"padding:8px;font-size:12px;}}"
+        )
+        root.addWidget(self.errors)
+
+        # Кнопки
+        btns = QHBoxLayout(); btns.setSpacing(10)
+        self.btn_convert = QPushButton("▶️  Конвертировать")
+        self.btn_convert.setMinimumHeight(44)
+        self.btn_convert.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_convert.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        self.btn_convert.setStyleSheet(_qss_button("filled"))
+        self.btn_convert.setEnabled(False)
+        self.btn_convert.clicked.connect(self._start)
+        btns.addWidget(self.btn_convert, stretch=1)
+
+        self.btn_stop = QPushButton("⏹  Стоп")
+        self.btn_stop.setMinimumHeight(44)
+        self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stop.setFont(QFont("Segoe UI Variable Display", 12, QFont.Weight.DemiBold))
+        self.btn_stop.setStyleSheet(_qss_button("danger"))
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.clicked.connect(self._stop)
+        btns.addWidget(self.btn_stop, stretch=0)
+
+        self.btn_close = QPushButton("Закрыть")
+        self.btn_close.setMinimumHeight(44)
+        self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_close.setStyleSheet(_qss_button("neutral"))
+        self.btn_close.clicked.connect(self.reject)
+        btns.addWidget(self.btn_close, stretch=0)
+        root.addLayout(btns)
+
+    # ── Выбор файлов ──────────────────────────────────────────────────────
+    def _pick_files(self):
+        if self._running:
+            return
+        dlg = PathPickerDialog(self, file_filter="word")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        files = _collect_word_files(dlg.selected_paths())
+        if not files:
+            self.lbl_status.setText("❌ Word-файлы не найдены")
+            return
+        self._files = files
+        self.list_files.clear()
+        for f in files:
+            self.list_files.addItem(os.path.basename(f))
+        self.list_files.setVisible(True)
+        self.lbl_count.setText(
+            f"Выбрано: {len(files)} {_plural_ru(len(files), 'файл', 'файла', 'файлов')}"
+        )
+        self._update_buttons()
+
+    def _update_buttons(self):
+        self.btn_convert.setEnabled(bool(self._files) and not self._running)
+        self.btn_stop.setEnabled(self._running)
+        self.btn_pick.setEnabled(not self._running)
+
+    # ── Запуск/остановка ──────────────────────────────────────────────────
+    def _start(self):
+        if self._running:
+            return
+        if not self._files:
+            return
+        if not _word_available():
+            self.lbl_status.setText("❌ Microsoft Word не найден")
+            self._show_errors(["Для конвертации требуется установленный Microsoft Word."])
+            return
+        self.progress_bar.setValue(0)
+        self._hide_errors()
+        self.lbl_status.setText("⏳ Конвертация…")
+        self._running = True
+        self._update_buttons()
+        self._thread = WordConvertThread(self._files)
+        self._thread.progress.connect(self._on_progress)
+        self._thread.status.connect(self._on_status)
+        self._thread.finished_ok.connect(self._on_finished)
+        self._thread.error.connect(self._on_error)
+        self._thread.stopped.connect(self._on_stopped)
+        self._thread.start()
+
+    def _stop(self):
+        if self._thread is not None and self._thread.isRunning():
+            self.lbl_status.setText("⏹ Отменяю…")
+            self.btn_stop.setEnabled(False)
+            self._thread.request_stop()
+
+    # ── Слоты потока (обновляют только виджеты диалога) ───────────────────
+    def _on_progress(self, v):
+        self.progress_bar.setValue(v)
+
+    def _on_status(self, s):
+        self.lbl_status.setText(f"⏳ {s}")
+
+    def _on_finished(self, ok, errors_count, errors):
+        self._running = False
+        self.progress_bar.setValue(100)
+        self.lbl_status.setText(f"✅ Конвертировано: {ok}, ошибок: {errors_count}")
+        if errors:
+            self._show_errors(errors)
+        self._update_buttons()
+
+    def _on_error(self, msg):
+        self._running = False
+        self.lbl_status.setText(f"❌ Ошибка: {msg}")
+        self._show_errors([msg])
+        self._update_buttons()
+
+    def _on_stopped(self):
+        self._running = False
+        self.progress_bar.setValue(0)
+        self.lbl_status.setText("⏹ Конвертация отменена")
+        self._update_buttons()
+
+    def _show_errors(self, errors):
+        listing = list(errors[:50])
+        if len(errors) > 50:
+            listing.append(f"… и ещё {len(errors) - 50}")
+        self.errors.setPlainText("\n".join(listing))
+        self.errors.setVisible(True)
+
+    def _hide_errors(self):
+        self.errors.clear()
+        self.errors.setVisible(False)
+
+    # ── Закрытие (Esc/крестик/«Закрыть» — через подтверждение) ────────────
+    def _confirm_close(self):
+        """True — можно закрывать; при работе потока корректно его останавливает."""
+        if self._running and self._thread is not None and self._thread.isRunning():
+            ans = QMessageBox.question(
+                self, "Отмена конвертации",
+                "Отменить конвертацию и закрыть?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return False
+            self._stop()
+            self._thread.wait(8000)
+            self._running = False
+        return True
+
+    def closeEvent(self, event):
+        if self._confirm_close():
+            super().closeEvent(event)
+        else:
+            event.ignore()
+
+    def done(self, r):
+        if self._confirm_close():
+            super().done(r)
 
 
 class PrintingCalculator(QMainWindow):
@@ -3904,7 +4484,7 @@ class PrintingCalculator(QMainWindow):
         self.label_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.label_status.setMinimumWidth(0)
         scl.addWidget(self.label_status)
-        scl_note=QLabel("Расчёт выполняется локально на вашем компьютере — файлы никуда не отправляются.")
+        scl_note=QLabel("Программа принимает и рассчитывает только файлы PDF. Word-документы предварительно переведите в PDF.")
         scl_note.setStyleSheet(f"color:{self.theme['text_muted']};font-size:11px;background:transparent;")
         scl_note.setWordWrap(True)
         scl_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -3928,6 +4508,19 @@ class PrintingCalculator(QMainWindow):
         self.btn_stop.setStyleSheet(_qss_button("danger")); self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_stop.clicked.connect(self.stop_analysis); self.btn_stop.setEnabled(False); arow.addWidget(self.btn_stop, stretch=0)
         scl.addLayout(arow)
+
+        self.btn_word2pdf=QPushButton("📄  Конвертировать Word → PDF")
+        self.btn_word2pdf.setFont(QFont("Segoe UI Variable Display",12,QFont.Weight.DemiBold))
+        self.btn_word2pdf.setMinimumHeight(42)
+        self.btn_word2pdf.setStyleSheet(_qss_button("tonal"))
+        self.btn_word2pdf.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_word2pdf.clicked.connect(self.open_word_converter)
+        if not _word_available():
+            self.btn_word2pdf.setEnabled(False)
+            self.btn_word2pdf.setToolTip("Требуется установленный Microsoft Word")
+        else:
+            self.btn_word2pdf.setToolTip("Пакетная конвертация .doc/.docx в PDF рядом с исходными файлами")
+        scl.addWidget(self.btn_word2pdf)
         right.addWidget(sc_card)
 
         lc_card=QFrame(); lc_card.setObjectName("Card")
@@ -4325,6 +4918,7 @@ class PrintingCalculator(QMainWindow):
         self.btn_analyze.setEnabled(True); self.btn_analyze.setText("⏸  Пауза")
         self.btn_analyze.setStyleSheet(_qss_button("warning"))
         self.btn_stop.setEnabled(True)
+        self.btn_word2pdf.setEnabled(False)
         self.thread=AnalysisThread(pdfs, force_bw=self.force_bw, count_fill=count_fill)
         self.thread.progress.connect(self.update_progress); self.thread.status.connect(self.update_status)
         self.thread.need_user_input.connect(self.show_unknown_format_dialog); self.thread.finished.connect(self.analysis_finished)
@@ -4344,6 +4938,27 @@ class PrintingCalculator(QMainWindow):
         self.btn_analyze.setEnabled(True)
         self.btn_analyze.setText("▶️  Начать анализ")
         self.btn_analyze.setStyleSheet(_qss_button("filled"))
+        self._set_word_button_enabled(True)
+
+    def _set_word_button_enabled(self, enabled):
+        """Кнопка конвертера активна только если Word доступен и включён запрос."""
+        btn = getattr(self, "btn_word2pdf", None)
+        if btn is None:
+            return
+        btn.setEnabled(bool(enabled) and _word_available())
+
+    def open_word_converter(self):
+        """Открывает модальный попап конвертации Word → PDF."""
+        if self.thread is not None and self.thread.isRunning():
+            return
+        if not _word_available():
+            QMessageBox.warning(
+                self, "Microsoft Word не найден",
+                "Для конвертации Word → PDF требуется установленный Microsoft Word.\n"
+                "Установите Word и перезапустите программу."
+            )
+            return
+        WordConverterDialog(self).exec()
 
     def show_unknown_format_dialog(self, w, h, color, pages, pdf_path):
         if self.thread and self.thread._stop_requested: self.thread.set_user_response("skip",None); return

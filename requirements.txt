@@ -5,4 +5,5 @@ pymupdf
 numpy
 pillow
 pyperclip
+pywin32
 pyinstaller

@@ -11,7 +11,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=_datas,
-    hiddenimports=[],
+    hiddenimports=[
+        'win32com', 'win32com.client', 'pythoncom', 'pywintypes',
+        'win32timezone',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
