@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QToolButton
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, pyqtProperty, QFileInfo, QSize
-from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QLinearGradient, QPixmap, QFontMetrics
+from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QLinearGradient, QPixmap, QFontMetrics, QFontDatabase
 import json
 import shutil
 
@@ -265,7 +265,7 @@ def _load_env_file():
 
 _load_env_file()
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.6"
 INNO_APP_ID = "{8F4C8D7A-2D52-4A1A-9E6B-7A8B9C0D1E2F}"
 UPDATE_REPO = "fabilya/PDKopirka"
 UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
@@ -275,6 +275,10 @@ UPDATE_MANIFEST_URL = (
     f"https://raw.githubusercontent.com/{UPDATE_REPO}/master/latest.json"
 )
 UPDATE_PAGE_URL = f"https://github.com/{UPDATE_REPO}/releases/latest"
+
+# Если установку версии уже запускали, а она не встала — не показываем
+# предложение обновиться чаще, чем раз в столько часов.
+UPDATE_RETRY_AFTER_HOURS = 24
 
 
 def _make_ssl_context_certifi():
@@ -340,12 +344,16 @@ def _app_data_dir():
 def _read_version_file():
     if not getattr(sys, "frozen", False):
         return None
-    version_file = Path(sys.executable).resolve().parent / "version.txt"
-    try:
-        text = version_file.read_text(encoding="utf-8").strip()
-        return text or None
-    except OSError:
-        return None
+    root = Path(sys.executable).resolve().parent
+    # version.txt лежит рядом с exe после установки; в нераспакованной сборке
+    # PyInstaller 6 кладёт datas в _internal — читаем оба места.
+    for candidate in (root / "version.txt", root / "_internal" / "version.txt"):
+        try:
+            text = candidate.read_text(encoding="utf-8").strip()
+            return text or None
+        except OSError:
+            continue
+    return None
 
 
 def _read_registry_version():
@@ -432,6 +440,28 @@ def _clear_update_settings_if_current():
         changed = True
     if changed:
         _save_update_settings(settings)
+
+
+def _update_is_recently_attempted(latest_ver):
+    """True, если установку этой же версии уже запускали и она не встала.
+
+    Защита от «бесконечного обновления»: установщик мог не сработать
+    (антивирус, отмена UAC, нехватка места), версия осталась прежней —
+    и окно обновления появлялось бы при каждом запуске. Такое предложение
+    повторяем не чаще раза в UPDATE_RETRY_AFTER_HOURS часов.
+    """
+    try:
+        settings = _load_update_settings()
+        attempt = str(settings.get("last_attempt_version") or "").strip()
+        if not attempt or _parse_version(attempt) != _parse_version(latest_ver):
+            return False
+        stamp = settings.get("last_attempt_at")
+        when = datetime.fromisoformat(stamp) if stamp else None
+        if when is None:
+            return False
+        return (datetime.now() - when) < timedelta(hours=UPDATE_RETRY_AFTER_HOURS)
+    except Exception:
+        return False
 
 
 def _create_single_instance_mutex():
@@ -536,17 +566,34 @@ def bring_window_to_front(window):
 
 
 def _find_asset_in_release(data):
-    """Ищет .exe установщик в данных одного релиза. Возвращает (latest_tag, download_url) или (None, None)."""
+    """Ищет .exe установщик в данных одного релиза. Возвращает (latest_tag, download_url) или (None, None).
+
+    В релизе лежат два файла: полный `PDKopirka_Setup_X.exe` и облегчённый
+    `PDKopirka_Setup_X_Update.exe`. По умолчанию берём полный: он подходит
+    любой машине, а облегчённый — только той, где уже есть LibreOffice.
+    """
     tag = data.get("tag_name", "")
     if not tag:
         return None, None
-    for asset in data.get("assets", []):
+    assets = data.get("assets", []) or []
+
+    def is_lite(name):
+        low = name.lower()
+        return "update" in low or "lite" in low
+
+    for asset in assets:
+        name_lower = asset["name"].lower()
+        if name_lower.endswith(".exe") and (
+            "setup" in name_lower or "install" in name_lower
+        ) and not is_lite(asset["name"]):
+            return tag, asset["browser_download_url"]
+    for asset in assets:
         name_lower = asset["name"].lower()
         if name_lower.endswith(".exe") and (
             "setup" in name_lower or "install" in name_lower
         ):
             return tag, asset["browser_download_url"]
-    for asset in data.get("assets", []):
+    for asset in assets:
         if asset["name"].lower().endswith(".exe"):
             return tag, asset["browser_download_url"]
     return tag, None
@@ -604,6 +651,12 @@ def check_for_update():
             tag = str(m.get("version", "")).strip()
             url = str(m.get("url", "")).strip()
             if tag and url and _parse_version(tag) > _parse_version(current):
+                # Облегчённый пакет обновления (без встроенного LibreOffice)
+                # подходит, только если LibreOffice уже стоит рядом с программой:
+                # иначе нужен полный установщик.
+                url_lite = str(m.get("url_lite", "")).strip()
+                if url_lite and _bundled_soffice() is not None:
+                    url = url_lite
                 return True, tag, url, None
             if tag and _parse_version(tag) <= _parse_version(current):
                 # Манифест доступен и новее нас нет — сразу выходим (без API)
@@ -890,6 +943,10 @@ class UpdateDialog(QDialog):
         self.status_lbl.setText("✅ Запуск установщика...")
         QApplication.processEvents()
         time.sleep(1)
+        # Отмечаем попытку только здесь — в момент реальной установки.
+        # Если пользователь нажмёт «Позже», это не должно скрывать
+        # предложение обновиться на следующем запуске.
+        _mark_update_attempt(self.latest_version)
         apply_update_and_restart(new_installer, self.latest_version)
 
 
@@ -898,6 +955,126 @@ class UpdateDialog(QDialog):
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CHANGELOG_HISTORY = [
+    {
+        "version": "3.2.6",
+        "date": "24.11.2026",
+        "sections": [
+            ("🔄 Обновления", [
+                "Защита от «бесконечного обновления»: если установку версии уже запускали, а программа осталась прежней, окно не появится при каждом запуске — повтор не раньше чем через 24 часа",
+                "Отметка о попытке ставится в момент запуска установщика: отказ «Позже» больше не откладывает предложение на сутки",
+                "Если манифест недоступен и используется GitHub API, выбирается полный установщик — он подходит любой машине, даже без LibreOffice",
+                "Обновление с версий 3.1.0 и старше проверено: папка установки та же, поэтому старая версия заменяется новой без цикла",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.5",
+        "date": "24.11.2026",
+        "sections": [
+            ("📋 Отчёт о конвертации", [
+                "В отчёте у каждого файла видно, чем он сконвертирован (например, «Microsoft Word 16.0») — при разборе жалоб на шрифты это первое, что нужно знать",
+                "Двойной клик по строке отчёта открывает соответствующий PDF",
+                "Если PDF не создан, двойной клик честно объясняет это, а не молчит",
+            ]),
+            ("🛠 Проверка шрифтов", [
+                "Проверка «шрифт не внедрён в PDF» оставлена только для запасного LibreOffice",
+                "Word всегда внедряет шрифты, поэтому для него эта проверка давала только ложные тревоги",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.4",
+        "date": "24.11.2026",
+        "sections": [
+            ("🛠 Проверка шрифтов", [
+                "Убраны ложные предупреждения «Шрифт не внедрён в PDF» у обычных документов Word",
+                "Причина: программа судила по косвенному признаку и путалась на составных шрифтах Word (Arial / Arial MT, Times New Roman PS / PSMT)",
+                "Теперь внедрение проверяется по структуре PDF — по дескриптору шрифта и его вложенным шрифтам",
+                "Если шрифт действительно не внедрён, предупреждение выводится один раз на шрифт из документа",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.3",
+        "date": "24.11.2026",
+        "sections": [
+            ("🛠 Конвертация", [
+                "Исправлена ошибка Word «К сожалению, файл не найден» — Word не открывает путь с прямыми слэшами (C:/Users/...)",
+                "Пути к файлам теперь нормализуются: нативные слэши, адреса file:///, переменные вида %USERPROFILE%, длинные пути",
+                "Если файл действительно перемещён или удалён, в отчёте будет точный путь и понятное объяснение вместо технической ошибки Word",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.2",
+        "date": "24.11.2026",
+        "sections": [
+            ("🛠 Конвертация", [
+                "Исправлена ошибка «'NoneType' object has no attribute 'SaveAs'» и пропавшие PDF",
+                "Первая причина: только что запущенный Word не успевал отдать документ — теперь программа ждёт готовности и повторяет попытку (до 3 раз)",
+                "Вторая причина: Word возвращал управление до фактической записи PDF, и файл мог не создаться — теперь используется синхронный экспорт и проверка, что PDF появился",
+                "Проверено на проблемном документе: 8 запусков из 8 без сбоев (раньше сбоил примерно каждый второй)",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.1",
+        "date": "24.11.2026",
+        "sections": [
+            ("📋 Отчёт о конвертации", [
+                "Отчёт больше не сохраняется PDF-файлом — он показывается только в окне конвертации",
+                "Так менеджер не отправит случайно отчёт на печать вместе с документами",
+                "Под таблицей добавлена памятка: что означают «✓ ок», «⚠ проверить» и «✗ ошибка»",
+                "Остались кнопки «Скопировать отчёт» и «Открыть папку с PDF»",
+            ]),
+            ("🔄 Обновления", [
+                "Обновление больше не тянет встроенный LibreOffice повторно: для машин, где он уже стоит, есть облегчённый пакет",
+                "Полный установщик по-прежнему нужен только для первой установки",
+            ]),
+            ("🔐 Подпись", [
+                "Добавлен скрипт подписи установщика и программы код-сертификатом (tools\\sign.ps1)",
+                "Без сертификата скрипт просто пишет, что подписывать нечем, и ничего не ломает",
+            ]),
+        ],
+    },
+    {
+        "version": "3.2.0",
+        "date": "24.11.2026",
+        "sections": [
+            ("📋 Отчёт о конвертации", [
+                "После каждой партии конвертации формируется отчёт: файл, страниц в DOCX, страниц в PDF, шрифты, статус",
+                "Итоговая плашка: сколько файлов, сколько страниц перенесено, сколько требуют проверки и сколько с ошибками",
+                "PDF-отчёт автоматически сохраняется рядом со сконвертированными файлами (имя «_Отчёт_конвертации_дата_время.pdf»)",
+                "Кнопки «Отчёт PDF», «Копировать отчёт» и «Открыть папку» — прямо в окне конвертации",
+                "Отчёт показывает, какой движок конвертировал файлы, и предупреждает, если это не Microsoft Word",
+            ]),
+            ("🔔 Уведомления о проблемах", [
+                "Файл помечается «⚠ проверить», если число страниц в DOCX и PDF не совпало",
+                "Отдельное предупреждение, если шрифт из документа не найден в системе или подставлен другой",
+                "Проверка штампов: программа находит и рассыпавшуюся вертикальную рамку, и неверные номера листов",
+                "Предупреждение, если шрифт не внедрён в PDF — такой файл может «поехать» при печати в типографии",
+                "Ошибка на одном файле не мешает остальным: она попадает в отчёт, а не обрывает партию",
+            ]),
+            ("🛠 Движки конвертации", [
+                "Word остаётся основным движком — эталонная вёрстка и штамп ГОСТ без искажений",
+                "Если Word не установлен, используется встроенный портативный LibreOffice 7.3.7 — без прав администратора",
+                "Версия LibreOffice выбрана не случайно: начиная с 7.4 повёрнутый текст в штампе ломается (tdf#149395)",
+                "У LibreOffice 7.3 своя особенность: поля PAGE в надписях штампа он не пересчитывает — проверка номеров листов это поймает",
+                "В окне конвертации видно, какой движок будет использован, и есть предупреждение, если это не Word",
+                "Установленный в системе LibreOffice используется только как последний вариант и сопровождается предупреждением",
+            ]),
+            ("⚙️ Установка", [
+                "Установщик кладёт портативный LibreOffice 7.3.7 рядом с программой (папка libreoffice)",
+                "На странице «Готово» показано, какой конвертер будет использовать программа",
+                "Если нет ни Word, ни встроенного LibreOffice — установщик честно предупреждает об этом",
+                "Прав администратора по-прежнему не требуется",
+            ]),
+            ("🔔 Перед конвертацией", [
+                "При запуске конвертации показывается напоминание проверить результат и рамку-штамп в PDF",
+                "Напоминание можно отключить галочкой «Больше не показывать это окно»",
+            ]),
+        ],
+    },
     {
         "version": "3.1.0",
         "date": "15.10.2026",
@@ -2978,6 +3155,9 @@ class AnalysisThread(QThread):
 # Кэш результата проверки наличия Word на время сеанса (Dispatch поднимает COM,
 # поэтому дёргаем его один раз, а не при каждом клике).
 _WORD_AVAILABLE_CACHE = None
+# Версия Word забирается в том же COM-сеансе, что и проверка наличия:
+# второй запуск Word на старте программы не нужен.
+_WORD_VERSION_CACHE = None
 
 
 def _word_available():
@@ -2986,7 +3166,7 @@ def _word_available():
     Результат кэшируется на время сеанса. Импорт win32com выполняется здесь,
     а не на уровне модуля: там, где pywin32 нет, программа всё равно запустится.
     """
-    global _WORD_AVAILABLE_CACHE
+    global _WORD_AVAILABLE_CACHE, _WORD_VERSION_CACHE
     if _WORD_AVAILABLE_CACHE is not None:
         return _WORD_AVAILABLE_CACHE
     available = False
@@ -2997,9 +3177,15 @@ def _word_available():
         try:
             app = win32com.client.Dispatch("Word.Application")
             try:
-                app.Quit()
-            except Exception:
-                pass
+                try:
+                    _WORD_VERSION_CACHE = str(app.Version).strip() or None
+                except Exception:
+                    _WORD_VERSION_CACHE = None
+            finally:
+                try:
+                    app.Quit()
+                except Exception:
+                    pass
             available = True
         finally:
             try:
@@ -3015,7 +3201,24 @@ def _word_available():
 RPC_E_CALL_REJECTED = -2147418111  # 0x8001010A
 RPC_RETRY_LIMIT = 5                # число повторов одного COM-вызова при RPC_E
 RPC_RETRY_DELAY = 0.7              # пауза между повторами, сек
-RPC_REJECT_LIMIT = 3               # серия RPC_E подряд → пересоздание Word
+
+WORD_ATTEMPTS = 3                  # попыток на файл, если Word «не готов»
+WORD_RETRY_DELAY = 1.5             # пауза перед пересозданием Word, сек
+PDF_WAIT_SECONDS = 60              # сколько ждать записи PDF на диск, сек
+
+
+class WordOpenError(RuntimeError):
+    """Word вернул None вместо документа — это не ошибка файла.
+
+    Так бывает, когда экземпляр Word ещё не готов после запуска, в нём висит
+    модальный диалог или документ занят другой программой. Раньше это
+    выглядело как «'NoneType' object has no attribute 'SaveAs'» и попадало
+    в отчёт как ошибка конвертации конкретного файла.
+    """
+
+
+class WordExportError(RuntimeError):
+    """Word не записал PDF на диск — тоже повод пересоздать Word и повторить."""
 
 
 def _unblock_file(path):
@@ -3044,20 +3247,87 @@ def _unblock_file(path):
     return False
 
 
+def _normalize_local_path(path):
+    """Приводит путь к нативному виду Windows.
+
+    Word через COM не открывает путь с прямыми слэшами: `C:/Users/...`
+    возвращает «К сожалению, файл не найден». А такой путь легко получить,
+    если вставить его в адресную строку проводника программы, сохранить файл
+    из другого приложения (там бывают `file:///C:/...`) или прийти из Qt.
+    Заодно снимаем префикс `\\\\?\\` и раскрываем `%USERPROFILE%`/`~`.
+    """
+    p = str(path or "").strip().strip('"').strip()
+    if not p:
+        return p
+    if p.lower().startswith("file:"):
+        from urllib.parse import unquote, urlparse
+        try:
+            parsed = urlparse(p)
+            decoded = unquote(parsed.path or "")
+        except Exception:
+            decoded = p
+        if re.match(r"^/[A-Za-z]:", decoded):
+            decoded = decoded[1:]
+        p = decoded
+    if p.startswith("\\\\?\\"):
+        p = p[4:]
+    p = os.path.expandvars(os.path.expanduser(p))
+    try:
+        p = os.path.abspath(p)
+    except Exception:
+        pass
+    return os.path.normpath(p)
+
+
+def _short_path(path):
+    """Короткое имя 8.3 (для путей длиннее 250 символов Word капризничает)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        if ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, 32768):
+            return buf.value or path
+    except Exception:
+        pass
+    return path
+
+
+def _word_error_text(exc):
+    """Человеческий текст ошибки Word вместо кортежа COM."""
+    args = getattr(exc, "args", None)
+    detail = ""
+    if args and len(args) > 2 and isinstance(args[2], tuple) and len(args[2]) > 2:
+        detail = str(args[2][2] or "")
+    if not detail:
+        # Наша собственная ошибка (RuntimeError/WordOpenError) уже сформулирована
+        # по-русски — не переписываем её.
+        text = str(exc).replace("\r", " ").replace("\n", " ").strip()
+        return text[:300] or "Word вернул ошибку без описания"
+    text = detail.replace("\r", " ").replace("\n", " ").strip()
+    low = text.lower()
+    if "не найден" in low or "not found" in low or "cannot find" in low:
+        return ("Word не нашёл файл — возможно, он перемещён, переименован "
+                "или путь к нему слишком длинный")
+    return text[:300]
+
+
 def _collect_word_files(paths):
     """Собирает *.doc/*.docx из переданных файлов и папок (папки — рекурсивно).
 
-    Игнорирует временные файлы блокировки Word (`~$...`).
+    Игнорирует временные файлы блокировки Word (`~$...`). Все пути приводятся
+    к нативному виду: Word через COM не открывает `C:/Users/...` с прямыми
+    слэшами и отвечает «К сожалению, файл не найден».
     """
     result = []
     seen = set()
 
     def _add(path):
-        if path not in seen:
-            seen.add(path)
-            result.append(path)
+        native = _normalize_local_path(path)
+        if native not in seen:
+            seen.add(native)
+            result.append(native)
 
-    for p in paths or []:
+    for raw in paths or []:
+        p = _normalize_local_path(raw)
         if os.path.isdir(p):
             for root_dir, _, files in os.walk(p):
                 for f in files:
@@ -3073,174 +3343,1063 @@ def _collect_word_files(paths):
     return result
 
 
-class WordConvertThread(QThread):
-    """Пакетная конвертация Word-файлов в PDF через COM Microsoft Word."""
+# ─────────────────────────────────────────────────────────────────────────────
+# Движки конвертации: Microsoft Word (COM) и встроенный LibreOffice 7.3.x
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# DOCX — это описание вёрстки, а не готовая картинка: результат зависит от
+# того, ЧЕМ файл открыли. Word правильно рендерит «родные» для этих файлов
+# конструкции — в частности, повёрнутый текст в группе фигур в колонтитуле
+# (штамп ГОСТ). LibreOffice начиная с 7.4 их ломает: текст штампа ложится
+# горизонтально и рвётся по буквам (tdf#149395, дубль tdf#164868).
+#
+# Поэтому движок выбирается по приоритету:
+#   1) Microsoft Word — эталонная вёрстка;
+#   2) встроенный портативный LibreOffice 7.3.x (папка libreoffice рядом
+#      с программой) — последняя ветка до регрессии, без прав администратора;
+#   3) установленный в системе LibreOffice — с явным предупреждением, если
+#      его версия не 7.3.x (штамп может быть испорчен).
 
-    progress    = pyqtSignal(int)
-    status      = pyqtSignal(str)
-    finished_ok = pyqtSignal(int, int, list)
-    error       = pyqtSignal(str)
-    stopped     = pyqtSignal()
+LO_PINNED_MAJOR = "7.3"
+LO_BUNDLE_SUBDIR = "libreoffice"
+LO_DOWNLOAD_URL = (
+    "https://downloadarchive.documentfoundation.org/libreoffice/old/7.3.7.2/"
+    "win/x86_64/LibreOffice_7.3.7.2_Win_x64.msi"
+)
 
-    def __init__(self, files):
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _program_root():
+    """Папка программы: рядом с exe после установки, иначе рядом с исходником."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _soffice_in(program_dir):
+    """Путь к soffice внутри папки program (или None).
+
+    Предпочитаем soffice.com: это консольный вариант того же загрузчика,
+    он отдаёт вывод и код возврата (soffice.exe — GUI-подсистема и молчит).
+    """
+    program_dir = Path(program_dir)
+    for name in ("soffice.com", "soffice.exe"):
+        exe = program_dir / name
+        if exe.is_file():
+            return exe
+    return None
+
+
+def _bundled_soffice():
+    """soffice встроенного портативного LibreOffice (или None).
+
+    После установки это {app}\\libreoffice, в исходниках — vendor\\libreoffice
+    (его готовит tools\\fetch_libreoffice.ps1).
+    """
+    if getattr(sys, "frozen", False):
+        bases = [_program_root() / LO_BUNDLE_SUBDIR]
+    else:
+        bases = [_program_root() / "vendor" / LO_BUNDLE_SUBDIR,
+                 _program_root() / LO_BUNDLE_SUBDIR]
+    for base in bases:
+        exe = _soffice_in(base / "program")
+        if exe is not None:
+            return exe
+    return None
+
+
+def _portable_soffice():
+    """soffice, развёрнутый программой в профиль пользователя (или None)."""
+    return _soffice_in(_app_data_dir() / LO_BUNDLE_SUBDIR / "program")
+
+
+_SOFFICE_VERSION_CACHE = {}
+
+
+def _soffice_version(soffice_path):
+    """Версия из `soffice --version` → '7.3.7.2' (или None).
+
+    Кэшируется по пути: запуск soffice занимает секунды, а спрашиваем мы
+    версию при каждой отрисовке подсказки у кнопки.
+    """
+    if not soffice_path:
+        return None
+    key = str(soffice_path)
+    if key in _SOFFICE_VERSION_CACHE:
+        return _SOFFICE_VERSION_CACHE[key]
+    version = None
+    try:
+        res = subprocess.run(
+            [key, "--version"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=_NO_WINDOW,
+        )
+        text = (res.stdout or "") + (res.stderr or "")
+        m = re.search(r"LibreOffice\s+([\d.]+)", text)
+        version = m.group(1).rstrip(".") if m else None
+    except Exception:
+        version = None
+    _SOFFICE_VERSION_CACHE[key] = version
+    return version
+
+
+def _system_soffice():
+    """soffice установленного LibreOffice из реестра (или None)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+    sub = r"SOFTWARE\LibreOffice\UNO\InstallPath"
+    views = (winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0),
+             winreg.KEY_READ | getattr(winreg, "KEY_WOW64_32KEY", 0),
+             winreg.KEY_READ)
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for flags in views:
+            try:
+                with winreg.OpenKey(root, sub, 0, flags) as key:
+                    install_path, _ = winreg.QueryValueEx(key, "")
+            except OSError:
+                continue
+            exe = _soffice_in(install_path)
+            if exe is not None:
+                return exe
+    return None
+
+
+def _word_version():
+    """Версия Word ('16.0') из того же COM-сеанса, что и проверка наличия."""
+    if _WORD_AVAILABLE_CACHE is None:
+        _word_available()
+    return _WORD_VERSION_CACHE
+
+
+def detect_conversion_engines():
+    """Список доступных движков конвертации, в порядке приоритета."""
+    engines = []
+
+    if _word_available():
+        engines.append({
+            "key": "word",
+            "title": "Microsoft Word",
+            "version": _word_version(),
+            "path": None,
+            "quality": "exact",
+            "warning": None,
+        })
+
+    bundled = _bundled_soffice()
+    if bundled:
+        version = _soffice_version(bundled)
+        pinned = (version or "").startswith(LO_PINNED_MAJOR)
+        engines.append({
+            "key": "libreoffice",
+            "title": "LibreOffice (встроенный)",
+            "version": version,
+            "path": str(bundled),
+            "quality": "approx",
+            "warning": None if pinned else (
+                "Встроенный LibreOffice не той версии, на которой проверялась "
+                "вёрстка — обязательно проверьте отчёт и штамп в PDF."
+            ),
+        })
+
+    portable = _portable_soffice()
+    if portable and (not bundled or portable != bundled):
+        version = _soffice_version(portable)
+        engines.append({
+            "key": "libreoffice",
+            "title": "LibreOffice (портативный)",
+            "version": version,
+            "path": str(portable),
+            "quality": "approx",
+            "warning": (
+                None if (version or "").startswith(LO_PINNED_MAJOR) else
+                "Версия LibreOffice не 7.3.x — возможна порча вертикального "
+                "текста в штампе, проверьте отчёт."
+            ),
+        })
+
+    system = _system_soffice()
+    if system:
+        version = _soffice_version(system)
+        pinned = (version or "").startswith(LO_PINNED_MAJOR)
+        engines.append({
+            "key": "libreoffice",
+            "title": "LibreOffice (установленный)",
+            "version": version,
+            "path": str(system),
+            "quality": "approx",
+            "warning": None if pinned else (
+                f"LibreOffice {version or ''} ломает повёрнутый текст в штампе "
+                f"(tdf#149395). Штамп в PDF может быть испорчен — сверьте отчёт."
+            ).strip(),
+        })
+
+    return engines
+
+
+def select_conversion_engine():
+    """Первый движок по приоритету (Word → встроенный LO → системный LO)."""
+    engines = detect_conversion_engines()
+    return engines[0] if engines else None
+
+
+def _engine_label(engine):
+    if not engine:
+        return "не найден"
+    version = engine.get("version")
+    return f"{engine.get('title') or 'Конвертер'} {version}".strip()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Метрики результата: страницы и шрифты (для отчёта о конвертации)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_WML_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_DML_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+
+# Шрифты, которые подставляются как метрически совместимые (Times→Liberation
+# и т.п.). Такая подмена вёрстку не сдвигает, поэтому это не «сломанный шрифт»,
+# но в отчёте она всё равно видна отдельной строкой.
+_METRIC_EQUIVALENTS = {
+    "timesnewroman": {"liberationserif", "nimbusroman", "tinos"},
+    "arial": {"liberationsans", "nimbussans", "arimo", "helvetica"},
+    "helvetica": {"arial", "liberationsans", "nimbussans", "arimo"},
+    "arialnarrow": {"liberationsansnarrow", "nimbussansnarrow"},
+    "calibri": {"carlito"},
+    "cambria": {"caladea"},
+    "couriernew": {"liberationmono", "nimbusmonops", "cousine", "courier"},
+    "segoeui": set(),
+    "verdana": set(),
+}
+
+# Служебные шрифты конвертеров: глифы маркеров списков, чекбоксов, символов.
+# Они появляются в PDF сами по себе и подменой шрифтов не являются.
+_SERVICE_FONTS = {"opensymbol", "standardglyphs", "adobesymbol", "dejavusans",
+                  "symbol", "symbolmt", "wingdings", "webdings", "zapfdingbats"}
+
+# Хвосты в именах PDF-шрифтов, которые обозначают начертание, а не семейство:
+# «Times New Roman PSMT» — это всё тот же Times New Roman.
+_PDF_STYLE_TOKENS = ("bolditalic", "boldoblique", "semibold", "regular", "oblique",
+                     "italic", "medium", "light", "black", "psmt", "bold", "roman", "ps", "mt")
+
+
+def _norm_font(name):
+    """Нормализованное имя шрифта для сравнения: 'Times New Roman' → 'timesnewroman'."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _pretty_font(name):
+    """Читаемое имя шрифта из PDF: 'AAAAAA+LiberationSerif-Bold' → 'Liberation Serif'."""
+    clean = re.sub(r"^[A-Z]{6}\+", "", name or "")
+    clean = re.split(r"[-.,]", clean)[0]
+    clean = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", clean)
+    return clean.strip() or (name or "")
+
+
+def _fonts_match(left, right):
+    """Считаем ли два шрифта одним и тем же (с учётом метрических аналогов).
+
+    left/right — уже нормализованные имена (_norm_font).
+    """
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if right in _METRIC_EQUIVALENTS.get(left, set()):
+        return True
+    if left in _METRIC_EQUIVALENTS.get(right, set()):
+        return True
+    # «Times New Roman PSMT» / «Arial MT» — семейство + хвост начертания
+    for long_name, short_name in ((left, right), (right, left)):
+        if long_name.startswith(short_name):
+            tail = long_name[len(short_name):]
+            if tail in _PDF_STYLE_TOKENS:
+                return True
+    return False
+
+
+def _matches_any(norm_name, candidates):
+    return any(_fonts_match(norm_name, other) for other in candidates)
+
+
+def _docx_used_fonts(path):
+    """Семейства шрифтов, реально используемые в документе (в порядке появления)."""
+    import xml.etree.ElementTree as ET
+
+    theme = {}
+    fonts = []
+    seen = set()
+
+    def add(name):
+        name = (name or "").strip()
+        if not name or len(name) > 80:
+            return
+        norm = _norm_font(name)
+        # «hovesBold Fallback» и подобное — служебные имена, которыми Word
+        # помечает уже подставленный шрифт: это не отдельный шрифт документа.
+        if not norm or "fallback" in norm:
+            return
+        if norm in seen:
+            return
+        seen.add(norm)
+        fonts.append(name)
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            if "word/theme/theme1.xml" in names:
+                try:
+                    root = ET.fromstring(z.read("word/theme/theme1.xml"))
+                    for tag in ("majorFont", "minorFont"):
+                        node = root.find(f".//{_DML_NS}{tag}/{_DML_NS}latin")
+                        if node is not None and node.get("typeface"):
+                            theme[tag] = node.get("typeface")
+                except Exception:
+                    pass
+            parts = [n for n in names
+                     if n == "word/document.xml"
+                     or re.match(r"word/(header|footer|footnotes|endnotes)\d*\.xml$", n)]
+
+            def add_rfonts(rfonts, text=""):
+                """Добавляет шрифты прогона с учётом письменности текста.
+
+                Для латиницы и кириллицы работает пара ascii/hAnsi; eastAsia и cs
+                относятся к другим письменностям — иначе в отчёт попадают
+                «потерянные» MS Mincho у русских документов.
+                """
+                has_cjk = any("\u2e80" <= ch <= "\u9fff" or "\uac00" <= ch <= "\ud7af"
+                              for ch in text)
+                has_rtl = any("\u0590" <= ch <= "\u08ff" for ch in text)
+                if has_cjk and rfonts.get(_WML_NS + "eastAsia"):
+                    add(rfonts.get(_WML_NS + "eastAsia"))
+                if has_rtl and rfonts.get(_WML_NS + "cs"):
+                    add(rfonts.get(_WML_NS + "cs"))
+                add(rfonts.get(_WML_NS + "ascii") or rfonts.get(_WML_NS + "hAnsi"))
+                for attr in ("asciiTheme", "hAnsiTheme"):
+                    raw = rfonts.get(_WML_NS + attr) or ""
+                    if "major" in raw.lower():
+                        add(theme.get("majorFont"))
+                    elif "minor" in raw.lower():
+                        add(theme.get("minorFont"))
+
+            for part in sorted(parts):
+                try:
+                    root = ET.fromstring(z.read(part))
+                except Exception:
+                    continue
+                # Берём только фрагменты с видимым текстом: объявленные, но пустые
+                # прогоны (остатки от копирования, служебные поля) не должны
+                # попадать в отчёт как «потерянный шрифт».
+                for run in root.iter(_WML_NS + "r"):
+                    text = "".join((t.text or "") for t in run.iter(_WML_NS + "t"))
+                    if not text.strip():
+                        continue
+                    rfonts = run.find(f"{_WML_NS}rPr/{_WML_NS}rFonts")
+                    if rfonts is not None:
+                        add_rfonts(rfonts, text)
+
+            # Стили берём только те, что реально действуют на весь документ:
+            # docDefaults и стиль Normal. Иначе в список попадают шрифты
+            # неиспользуемых заготовок стилей и отчёт ругается зря.
+            if "word/styles.xml" in names:
+                try:
+                    styles_root = ET.fromstring(z.read("word/styles.xml"))
+                except Exception:
+                    styles_root = None
+                if styles_root is not None:
+                    defaults = styles_root.find(f".//{_WML_NS}docDefaults")
+                    if defaults is not None:
+                        for rfonts in defaults.iter(_WML_NS + "rFonts"):
+                            add_rfonts(rfonts)
+                    for style in styles_root.iter(_WML_NS + "style"):
+                        if (style.get(_WML_NS + "default") == "1"
+                                or style.get(_WML_NS + "styleId") == "Normal"):
+                            for rfonts in style.iter(_WML_NS + "rFonts"):
+                                add_rfonts(rfonts)
+    except Exception:
+        return []
+    return fonts
+
+
+def _docx_source_pages(path):
+    """Число страниц, записанное в DOCX при последнем сохранении (docProps/app.xml)."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            data = z.read("docProps/app.xml")
+        m = re.search(rb"<Pages>\s*(\d+)\s*</Pages>", data)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def _installed_font_families():
+    """Нормализованные имена установленных шрифтов (с лицензионными ограничениями — нет)."""
+    families = set()
+    try:
+        families = {_norm_font(f) for f in QFontDatabase.families() if f}
+    except Exception:
+        families = set()
+    if families:
+        return families
+    if sys.platform != "win32":
+        return families
+    try:
+        import winreg
+    except ImportError:
+        return families
+    keys = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"),
+    )
+    for root, sub in keys:
+        try:
+            with winreg.OpenKey(root, sub) as key:
+                count = winreg.QueryInfoKey(key)[1]
+                for i in range(count):
+                    try:
+                        name, _value, _type = winreg.EnumValue(key, i)
+                    except OSError:
+                        continue
+                    name = re.sub(r"\s*\((TrueType|OpenType|Type 1)\)\s*$", "", name, flags=re.I)
+                    for part in name.split("&"):
+                        norm = _norm_font(part)
+                        if norm:
+                            families.add(norm)
+        except OSError:
+            continue
+    return families
+
+
+def _pdf_pages(path):
+    try:
+        with fitz.open(path) as doc:
+            return len(doc)
+    except Exception:
+        return None
+
+
+def _font_file_present(doc, xref, depth=0):
+    """Есть ли в PDF встроенный файл шрифта: True / False / None (неизвестно).
+
+    Нельзя судить по `ext` из get_fonts: у составных (Type0) шрифтов там
+    бывает «n/a», хотя файл встроен в дочерний шрифт. Поэтому идём по
+    структуре: DescendantFonts → FontDescriptor → FontFile/FontFile2/FontFile3.
+    «Неизвестно» возвращаем, когда объект шрифта недоступен (xref=0): тогда
+    предупреждать нельзя — иначе получаются ложные «шрифт не внедрён».
+    """
+    if not xref or depth > 3:
+        return None
+    try:
+        desc_type, desc_val = doc.xref_get_key(xref, "FontDescriptor")
+    except Exception:
+        return None
+    if desc_type == "null" or not desc_val:
+        # Type0: сам шрифт без дескриптора, файл лежит в дочернем шрифте
+        try:
+            t, v = doc.xref_get_key(xref, "DescendantFonts")
+        except Exception:
+            return None
+        if t == "array" and v:
+            child = re.search(r"(\d+)\s+0\s+R", v)
+            if child:
+                return _font_file_present(doc, int(child.group(1)), depth + 1)
+        return None
+    if desc_type == "xref":
+        m = re.match(r"(\d+)\s+0\s+R", desc_val or "")
+        if not m:
+            return None
+        descriptor = int(m.group(1))
+    elif desc_type == "dict":
+        descriptor = xref
+    else:
+        return None
+    for key in ("FontFile", "FontFile2", "FontFile3"):
+        try:
+            ktype, kval = doc.xref_get_key(descriptor, key)
+        except Exception:
+            continue
+        if ktype not in ("null", "None", "") and kval:
+            return True
+    return False
+
+
+def _pdf_font_families(path):
+    """(семейства шрифтов в PDF, семейства без внедрённого файла шрифта)."""
+    families = set()
+    embedded = {}
+    try:
+        with fitz.open(path) as doc:
+            for page in doc:
+                for item in page.get_fonts(full=False):
+                    # (xref, ext, type, basefont, name, encoding)
+                    xref, basefont = item[0], item[3]
+                    pretty = _pretty_font(basefont)
+                    norm = _norm_font(pretty)
+                    if not norm:
+                        continue
+                    families.add(pretty)
+                    status = _font_file_present(doc, xref)
+                    if status is None:
+                        continue
+                    prev = embedded.get(norm)
+                    embedded[norm] = status if prev is None else (prev or status)
+    except Exception:
+        pass
+    not_embedded = {f for f in families if embedded.get(_norm_font(f)) is False}
+    return families, not_embedded
+
+
+def check_document_fonts(src, pdf_path, installed):
+    """Сверяет шрифты DOCX с системой и с получившимся PDF.
+
+    Возвращает словарь: missing (нет в системе), replaced (в PDF подставлен
+    другой), unexpected (в PDF появились незаявленные), not_embedded
+    (в PDF не внедрён файл шрифта).
+    """
+    requested = _docx_used_fonts(src)
+    pdf_families, not_embedded = _pdf_font_families(pdf_path)
+    pdf_norm = [_norm_font(f) for f in pdf_families]
+
+    missing, replaced = [], []
+    for name in requested:
+        norm = _norm_font(name)
+        if installed and not _matches_any(norm, installed):
+            missing.append(name)
+        if pdf_norm and not _matches_any(norm, pdf_norm):
+            replaced.append(name)
+
+    requested_norm = [_norm_font(n) for n in requested]
+    unexpected = [f for f in sorted(pdf_families)
+                  if not _matches_any(_norm_font(f), requested_norm)
+                  and _norm_font(f) not in _SERVICE_FONTS]
+
+    # «Не внедрён» показываем один раз на шрифт ИЗ ДОКУМЕНТА, а не на каждое
+    # написание в PDF: Arial и Arial MT — один и тот же шрифт, и четыре строки
+    # про два шрифта только пугают менеджера.
+    not_embedded_names, seen_requested = [], set()
+    for pdf_font in sorted(not_embedded):
+        pdf_norm = _norm_font(pdf_font)
+        for name, norm in zip(requested, requested_norm):
+            if norm in seen_requested:
+                continue
+            if _fonts_match(pdf_norm, norm):
+                seen_requested.add(norm)
+                not_embedded_names.append(name)
+                break
+
+    return {
+        "requested": requested,
+        "pdf_fonts": sorted(pdf_families),
+        "missing": missing,
+        "replaced": replaced,
+        "unexpected": unexpected,
+        "not_embedded": not_embedded_names,
+    }
+
+
+def _file_seconds(started_at):
+    return round(max(0.0, time.time() - started_at), 1)
+
+
+def check_stamp_page_numbers(pdf_path):
+    """Сверяет номер листа в штампе с фактическим номером страницы.
+
+    LibreOffice 7.3 импортирует поля PAGE внутри надписей штампа как обычный
+    текст: в PDF на всех страницах остаётся одно и то же число (то, что было
+    в DOCX при последнем сохранении). Word пересчитывает поля при экспорте.
+
+    Нумерация может законно начинаться не с первой страницы (документ —
+    продолжение другого), поэтому расхождение само по себе не ошибка.
+    Ошибка — «застывшее» число: одно и то же значение на многих страницах.
+
+    Возвращает словарь:
+        checked   — сколько страниц удалось проверить
+        rows      — [(страница, показано, ожидалось), ...]
+        stale     — (значение, сколько_страниц) или None
+    """
+    import pymupdf
+    from collections import Counter
+
+    markers = re.compile(r"^(лист|листов|стр|страница)\.?$", re.IGNORECASE)
+    rows = []
+    try:
+        with pymupdf.open(pdf_path) as doc:
+            for pno, page in enumerate(doc):
+                words = page.get_text("words")
+                if not words:
+                    continue
+                marker = None
+                for w in words:
+                    if markers.match((w[4] or "").strip()):
+                        marker = w
+                        break
+                if marker is None:
+                    continue
+                mx1, my0, my1 = marker[2], marker[1], marker[3]
+                best = None
+                for w in words:
+                    text = (w[4] or "").strip()
+                    if not re.fullmatch(r"\d{1,4}", text):
+                        continue
+                    # число справа по той же строке или сразу под подписью
+                    same_row = abs(w[1] - my0) < 12 and w[0] >= mx1 - 2
+                    below = w[0] < mx1 + 40 and 0 <= w[1] - my1 < 26
+                    if not (same_row or below):
+                        continue
+                    dist = (w[0] - mx1) ** 2 + (w[1] - my1) ** 2
+                    if best is None or dist < best[0]:
+                        best = (dist, int(text))
+                if best is None:
+                    continue
+                rows.append((pno + 1, best[1], pno + 1))
+    except Exception:
+        return {"checked": 0, "rows": [], "stale": None}
+
+    # Законное постоянное смещение (нумерация начинается, например, с 2)
+    # принимаем за норму и из подозрительных страниц исключаем.
+    stale = None
+    if rows:
+        offsets = Counter(shown - expected for _, shown, expected in rows)
+        dominant = None
+        if offsets:
+            value, count = offsets.most_common(1)[0]
+            if count >= max(3, int(len(rows) * 0.5)):
+                dominant = value
+        suspicious = [r for r in rows if (r[1] - r[2]) != dominant]
+        shown_counter = Counter(r[1] for r in suspicious)
+        if shown_counter:
+            value, count = shown_counter.most_common(1)[0]
+            if count >= 3:
+                stale = (value, count)
+
+    return {"checked": len(rows), "rows": rows, "stale": stale}
+
+
+def check_stamp_vertical_text(pdf_path):
+    """Ищет рассыпавшийся штамп: текст есть, но он не повёрнут.
+
+    В рамке ГОСТ надписи «Подп. и дата», «Взам. инв. №», «Инв. № подл.» стоят
+    вертикально в узкой полосе слева. Если конвертер потерял поворот (так ведёт
+    себя LibreOffice 7.4+, tdf#149395), текст ложится горизонтально в полоску
+    шириной в пару миллиметров и рвётся на куски по 1–3 знака.
+
+    Признак поломки: в левой полосе нет ни одной вертикальной строки, зато
+    много обрывков по 1–3 символа. В обычном тексте такого не бывает —
+    там в полосе длинные строки.
+
+    Возвращает (проверено_страниц, [номера подозрительных страниц]).
+    """
+    import pymupdf
+
+    checked = 0
+    suspects = []
+    try:
+        with pymupdf.open(pdf_path) as doc:
+            for pno in range(min(len(doc), 6)):
+                page = doc[pno]
+                vertical = 0
+                fragments = 0
+                for block in page.get_text("dict").get("blocks", []):
+                    for line in block.get("lines", []):
+                        spans = line.get("spans") or []
+                        if not spans:
+                            continue
+                        if min(s["bbox"][0] for s in spans) >= 100:
+                            continue
+                        direction = line.get("dir", (1, 0))
+                        if abs(direction[0]) < 0.2:
+                            vertical += 1
+                        else:
+                            text = "".join(s["text"] for s in spans).strip(" .,-")
+                            if 0 < len(text) <= 3:
+                                fragments += 1
+                checked += 1
+                if vertical == 0 and fragments >= 8:
+                    suspects.append(pno + 1)
+    except Exception:
+        return 0, []
+    return checked, suspects
+
+
+class ConversionThread(QThread):
+    """Пакетная конвертация Word-файлов в PDF выбранным движком.
+
+    Эмитит результат по каждому файлу (file_done) и итоговый отчёт
+    (finished_report): число страниц DOCX/PDF, проверка шрифтов,
+    статус ok / warn / error.
+    """
+
+    progress        = pyqtSignal(int)
+    status          = pyqtSignal(str)
+    file_done       = pyqtSignal(dict)
+    finished_report = pyqtSignal(dict)
+    error           = pyqtSignal(str)
+    stopped         = pyqtSignal()
+
+    LO_TIMEOUT = 600  # сек на один файл при конвертации LibreOffice
+
+    def __init__(self, files, engine, installed_fonts=None):
         super().__init__()
-        self.files = list(files)
+        # Нативные пути: Word не открывает «C:/Users/...» (прямые слэши).
+        self.files = [_normalize_local_path(f) for f in files]
+        self.engine = dict(engine or {})
+        self.installed_fonts = set(installed_fonts or ())
         self._stop_requested = False
+        self._total = len(self.files) or 1
+        self._done = 0
+        self._records = {}
+        self._finalized = set()
 
     def request_stop(self):
         self._stop_requested = True
 
+    # ── общие помощники ──────────────────────────────────────────────────
+    def _out_path(self, src):
+        return os.path.splitext(src)[0] + ".pdf"
+
+    def _evaluate(self, src, seconds, error=None, word_pages=None):
+        """Метрики файла + запись отчёта. Вызывается один раз на файл."""
+        out_pdf = self._out_path(src)
+        src_pages = word_pages if word_pages is not None else _docx_source_pages(src)
+        pdf_ok = os.path.isfile(out_pdf) and os.path.getsize(out_pdf) > 0
+        pdf_pages = _pdf_pages(out_pdf) if pdf_ok else None
+
+        fonts = {"missing": [], "replaced": [], "unexpected": [], "not_embedded": []}
+        stamp = {"checked": 0, "rows": [], "stale": None}
+        if pdf_ok:
+            try:
+                fonts = check_document_fonts(src, out_pdf, self.installed_fonts)
+            except Exception:
+                pass
+            if (self.engine.get("key") or "word") == "word":
+                # Word всегда внедряет шрифты в PDF. Проверять это для него
+                # бессмысленно, а любые сомнения PyMuPDF дают ложные тревоги —
+                # проверка нужна только запасному LibreOffice.
+                fonts["not_embedded"] = []
+            try:
+                stamp.update(check_stamp_page_numbers(out_pdf))
+            except Exception:
+                pass
+            try:
+                rot_checked, rot_suspects = check_stamp_vertical_text(out_pdf)
+                stamp["rotation_checked"] = rot_checked
+                stamp["rotation_suspects"] = rot_suspects
+            except Exception:
+                pass
+
+        issues = []
+        if error:
+            issues.append(f"Ошибка конвертации: {error}")
+        elif not pdf_ok:
+            issues.append("PDF не создан")
+        else:
+            if src_pages and pdf_pages and src_pages != pdf_pages:
+                issues.append(
+                    f"Страниц в DOCX {src_pages}, в PDF {pdf_pages} — разбивка изменилась"
+                )
+            elif not src_pages:
+                issues.append("В исходном файле не записано число страниц — сверку сделать не удалось")
+            if stamp.get("rotation_suspects"):
+                suspects = stamp["rotation_suspects"]
+                rot_checked = stamp.get("rotation_checked") or len(suspects)
+                if len(suspects) * 2 >= rot_checked:
+                    issues.append(
+                        "Вертикальные надписи штампа не повёрнуты — рамка, похоже, "
+                        "рассыпалась (конвертер не Word). Откройте PDF и проверьте рамку"
+                    )
+            if stamp.get("stale"):
+                value, count = stamp["stale"]
+                issues.append(
+                    f"В штампе на {count} страницах стоит одно и то же число {value} — "
+                    f"поле «Лист» не обновилось. Откройте PDF и проверьте рамку"
+                )
+            # Про подмену пишем только когда шрифта реально нет в системе:
+            # иначе в отчёт попадают служебные подстановки Word, и менеджер
+            # привыкает игнорировать предупреждения.
+            replaced_set = set(fonts.get("replaced", []))
+            for name in fonts.get("missing", []):
+                if name in replaced_set:
+                    issues.append(f"Шрифт «{name}» не найден в системе — в PDF подставлен другой")
+                else:
+                    issues.append(f"Шрифт не найден в системе: {name}")
+            for name in fonts.get("not_embedded", []):
+                issues.append(f"Шрифт не внедрён в PDF: {name}")
+
+        if error or not pdf_ok:
+            status = "error"
+        elif issues:
+            status = "warn"
+        else:
+            status = "ok"
+
+        rec = {
+            "name": os.path.basename(src),
+            "src": src,
+            "out": out_pdf,
+            "engine": self.engine.get("key"),
+            # Чем именно сделан этот PDF: Word 2016 и Word 2019, например,
+            # по-разному называют одни и те же шрифты — при разборе жалобы
+            # это первое, что нужно знать.
+            "engine_label": _engine_label(self.engine),
+            "seconds": seconds,
+            "src_pages": src_pages,
+            "pdf_pages": pdf_pages,
+            "pages_mismatch": bool(src_pages and pdf_pages and src_pages != pdf_pages),
+            "fonts": fonts,
+            "stamp": stamp,
+            "issues": issues,
+            "status": status,
+            "error": error,
+        }
+        self._records[src] = rec
+        self.file_done.emit(dict(rec))
+        if src not in self._finalized:
+            self._finalized.add(src)
+            self._done += 1
+            self.progress.emit(int(100 * self._done / self._total))
+        return rec
+
+    def _build_report(self, started_at):
+        files = [self._records[s] for s in self.files if s in self._records]
+        counts = {"ok": 0, "warn": 0, "error": 0}
+        for rec in files:
+            counts[rec["status"]] = counts.get(rec["status"], 0) + 1
+        return {
+            "when": datetime.now().isoformat(timespec="seconds"),
+            "seconds": round(max(0.0, time.time() - started_at), 1),
+            "stopped": self._stop_requested,
+            "engine": {
+                "key": self.engine.get("key"),
+                "title": self.engine.get("title"),
+                "version": self.engine.get("version"),
+                "warning": self.engine.get("warning"),
+            },
+            "files": files,
+            "counts": counts,
+            "totals": {
+                "files": len(files),
+                "src_pages": sum((r["src_pages"] or 0) for r in files),
+                "pdf_pages": sum((r["pdf_pages"] or 0) for r in files),
+                "mismatch": sum(1 for r in files if r.get("pages_mismatch")),
+                "font_problems": sum(
+                    1 for r in files
+                    if r["fonts"].get("missing") or r["fonts"].get("not_embedded")
+                ),
+                "stamp_problems": sum(
+                    1 for r in files
+                    if (r.get("stamp") or {}).get("stale")
+                    or (r.get("stamp") or {}).get("rotation_suspects")
+                ),
+                "failed": counts.get("error", 0),
+            },
+        }
+
     def run(self):
-        # COM в фоновом потоке требует инициализации именно в этом потоке.
+        started_at = time.time()
+        # «Метка интернета» мешает и Word (Protected View), и LibreOffice.
+        for src in self.files:
+            try:
+                _unblock_file(src)
+            except Exception:
+                pass
+        try:
+            if (self.engine.get("key") or "word") == "libreoffice":
+                self._run_libreoffice()
+            else:
+                self._run_word()
+        except Exception as e:
+            self.error.emit(str(e))
+            return
+        report = self._build_report(started_at)
+        if self._stop_requested:
+            self.stopped.emit()
+        self.finished_report.emit(report)
+
+    # ── Microsoft Word ───────────────────────────────────────────────────
+    def _open_word(self, win32com):
+        # DispatchEx создаёт ОТДЕЛЬНЫЙ процесс Word: обычный Dispatch цепляется
+        # к уже запущенному (залипшему/чужому) экземпляру.
+        try:
+            app = win32com.client.DispatchEx("Word.Application")
+        except Exception:
+            app = win32com.client.Dispatch("Word.Application")
+        for attr, value in (("Visible", False), ("DisplayAlerts", 0), ("AutomationSecurity", 3)):
+            try:
+                setattr(app, attr, value)
+            except Exception:
+                pass
+        # Только что запущенный Word не сразу обслуживает Open: если дёрнуть
+        # его слишком рано, Documents.Open возвращает None (и раньше это
+        # вылезало как «'NoneType' object has no attribute 'SaveAs'»).
+        for _ in range(6):
+            try:
+                self._call(lambda: app.Documents.Count)
+                break
+            except Exception:
+                time.sleep(0.4)
+        return app
+
+    def _is_rpc_rejected(self, exc):
+        return bool(getattr(exc, "args", None)) and exc.args[0] == RPC_E_CALL_REJECTED
+
+    def _is_dead_instance(self, exc):
+        if self._is_rpc_rejected(exc):
+            return True
+        # dynamic dispatch на залипшем экземпляре теряет методы и бросает AttributeError
+        return isinstance(exc, AttributeError)
+
+    def _call(self, fn, *a, **kw):
+        attempts = 0
+        while True:
+            try:
+                return fn(*a, **kw)
+            except Exception as e:
+                if not self._is_rpc_rejected(e) or attempts >= RPC_RETRY_LIMIT:
+                    raise
+                attempts += 1
+                if self._stop_requested:
+                    raise
+                time.sleep(RPC_RETRY_DELAY)
+
+    def _wait_for_pdf(self, path, before_mtime, timeout=PDF_WAIT_SECONDS):
+        """Ждёт, пока Word действительно запишет PDF на диск.
+
+        Экспорт в PDF у Word не всегда завершён к моменту возврата COM-вызова:
+        для больших документов файл появляется позже. Если закрыть Word сразу,
+        запись обрывается и PDF не создаётся вовсе — раньше это выглядело как
+        «файл не создан» без объяснения причины.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._stop_requested:
+                return False
+            try:
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    if before_mtime is None or os.path.getmtime(path) > before_mtime + 1e-6:
+                        return True
+            except OSError:
+                pass
+            time.sleep(0.25)
+        return False
+
+    def _convert_one_word(self, app, src):
+        """Открывает документ, сохраняет PDF, возвращает число страниц Word."""
+        doc = None
+        src = _normalize_local_path(src)
+        if not os.path.isfile(src):
+            raise RuntimeError(
+                f"Файл не найден: {src}. Возможно, он перемещён, переименован "
+                f"или лежит на недоступном диске"
+            )
+        # Для очень длинных путей Word капризничает — пробуем короткое имя 8.3
+        candidates = [src]
+        if len(src) > 250:
+            short = _short_path(src)
+            if short and short != src:
+                candidates.append(short)
+        try:
+            last_exc = None
+            for candidate in candidates:
+                try:
+                    doc = self._call(
+                        app.Documents.Open, candidate,
+                        ReadOnly=True, AddToRecentFiles=False, Visible=False,
+                    )
+                except Exception as e:
+                    last_exc = e
+                    if "не найден" not in _word_error_text(e):
+                        raise
+                    doc = None
+                if doc is not None:
+                    break
+            if doc is None:
+                if last_exc is not None:
+                    raise last_exc
+                # Word иногда возвращает None вместо документа: экземпляр ещё
+                # не готов, показан модальный диалог или файл занят. Повторяем.
+                raise WordOpenError(
+                    "Word не открыл документ — возможно, файл занят другой "
+                    "программой или Word не успел запуститься"
+                )
+            out_pdf = self._out_path(src)
+            before_mtime = os.path.getmtime(out_pdf) if os.path.isfile(out_pdf) else None
+            try:
+                # ExportAsFixedFormat — «родной» экспорт в PDF: синхронный,
+                # в отличие от SaveAs, который может вернуть управление до
+                # фактической записи файла.
+                self._call(doc.ExportAsFixedFormat, out_pdf, 17)  # 17 = wdExportFormatPDF
+            except AttributeError:
+                self._call(doc.SaveAs, out_pdf, FileFormat=17)
+            if not self._wait_for_pdf(out_pdf, before_mtime):
+                raise WordExportError(
+                    "Word не записал PDF-файл. Проверьте, что документ не открыт "
+                    "в другой программе и на диске есть место"
+                )
+            pages = None
+            try:
+                pages = int(doc.ComputeStatistics(2))  # 2 = wdStatisticPages
+            except Exception:
+                pages = None
+            return pages
+        finally:
+            if doc is not None:
+                try:
+                    doc.Close(SaveChanges=False)
+                except Exception:
+                    pass
+
+    def _run_word(self):
         try:
             import pythoncom
             import win32com.client
         except Exception as e:
-            self.error.emit(f"Модуль pywin32 не найден: {e}")
-            return
+            raise RuntimeError(f"Модуль pywin32 не найден: {e}")
         pythoncom.CoInitialize()
         word = None
-        ok = 0
-        errors = []
-        total = len(self.files)
-        consecutive_rpc = 0
-        retry_later = []
-
-        def _open_word():
-            # DispatchEx создаёт ОТДЕЛЬНЫЙ процесс Word. Обычный Dispatch
-            # присоединяется к уже запущенному экземпляру (залипшему/чужому),
-            # из-за чего «пересоздание» не давало свежий Word и вся партия
-            # падала с RPC_E_CALL_REJECTED / AttributeError('Open.SaveAs').
-            try:
-                app = win32com.client.DispatchEx("Word.Application")
-            except Exception:
-                app = win32com.client.Dispatch("Word.Application")
-            try:
-                app.Visible = False
-            except Exception:
-                pass
-            try:
-                app.DisplayAlerts = 0
-            except Exception:
-                pass
-            try:
-                # Отключает макросы автоматизации (иначе всплывают модальные
-                # предупреждения безопасности и Word перестаёт отвечать на COM).
-                app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable
-            except Exception:
-                pass
-            return app
-
-        def _is_dead_instance(exc):
-            """Экземпляр Word мёртв/не обслуживает COM (не ошибка конкретного файла)."""
-            if _is_rpc_rejected(exc):
-                return True
-            # pywin32 dynamic dispatch на залипшем экземпляре теряет методы
-            # и бросает AttributeError('Open.SaveAs') вместо com_error.
-            return isinstance(exc, AttributeError)
-
-        def _is_rpc_rejected(exc):
-            return bool(getattr(exc, "args", None)) and \
-                exc.args[0] == RPC_E_CALL_REJECTED
-
-        def _call(fn, *a, **kw):
-            """Вызов COM-метода с повторами только на RPC_E_CALL_REJECTED."""
-            attempts = 0
-            while True:
-                try:
-                    return fn(*a, **kw)
-                except Exception as e:
-                    if not _is_rpc_rejected(e) or attempts >= RPC_RETRY_LIMIT:
-                        raise
-                    attempts += 1
-                    if self._stop_requested:
-                        raise
-                    time.sleep(RPC_RETRY_DELAY)
-
-        def _convert_one(app, src):
-            doc = None
-            try:
-                doc = _call(
-                    app.Documents.Open,
-                    src, ReadOnly=True, AddToRecentFiles=False, Visible=False
-                )
-                out_pdf = os.path.splitext(src)[0] + ".pdf"
-                _call(doc.SaveAs, out_pdf, FileFormat=17)  # 17 = wdFormatPDF
-            finally:
-                if doc is not None:
-                    try:
-                        doc.Close(SaveChanges=False)
-                    except Exception:
-                        pass
-
         try:
-            # Снимаем «метку интернета» со всей партии до открытия в Word:
-            # иначе Protected View ломает автоматизацию (каскад RPC_E_CALL_REJECTED).
-            for src in self.files:
-                _unblock_file(src)
-
-            word = _open_word()
+            word = self._open_word(win32com)
             for i, src in enumerate(self.files):
                 if self._stop_requested:
                     break
-                name = os.path.basename(src)
-                self.status.emit(f"Конвертация: {name} ({i + 1}/{total})")
-                try:
-                    _convert_one(word, src)
-                    ok += 1
-                    consecutive_rpc = 0
-                except Exception as e:
-                    if _is_dead_instance(e):
-                        # Залипший экземпляр Word: не пишем в errors сразу,
-                        # даём шанс после пересоздания Word.
-                        consecutive_rpc += 1
-                        retry_later.append(src)
-                        if consecutive_rpc >= RPC_REJECT_LIMIT:
-                            try:
-                                word.Quit()
-                            except Exception:
-                                pass
-                            word = _open_word()
-                            consecutive_rpc = 0
-                    else:
-                        errors.append(f"{name}: {e}")
-                        consecutive_rpc = 0
-                self.progress.emit(int(100 * (i + 1) / total))
-
-            # Второй проход по «отложенным»: Word уже пересоздан.
-            # Серия пересозданий ограничена, чтобы не зациклиться на битых файлах.
-            if retry_later and not self._stop_requested:
-                second_pass_recreates = 0
-                for src in retry_later:
-                    if self._stop_requested:
-                        break
-                    name = os.path.basename(src)
-                    self.status.emit(f"Повтор: {name}")
+                self.status.emit(
+                    f"Конвертация: {os.path.basename(src)} ({i + 1}/{len(self.files)})"
+                )
+                started = time.time()
+                pages = None
+                error = None
+                for attempt in range(1, WORD_ATTEMPTS + 1):
                     try:
-                        _convert_one(word, src)
-                        ok += 1
+                        pages = self._convert_one_word(word, src)
+                        error = None
+                        break
                     except Exception as e:
-                        if (not _is_dead_instance(e)
-                                or second_pass_recreates >= RPC_REJECT_LIMIT):
-                            errors.append(f"{name}: {e}")
-                            continue
-                        # Экземпляр снова мёртв — пересоздаём и пробуем ещё раз.
-                        second_pass_recreates += 1
+                        error = _word_error_text(e)
+                        if not (self._is_dead_instance(e)
+                                or isinstance(e, (WordOpenError, WordExportError))):
+                            break  # ошибка конкретного файла — повторы не помогут
+                        if attempt >= WORD_ATTEMPTS or self._stop_requested:
+                            break
+                        # Залипший или ещё не готовый Word: пересоздаём и ждём
+                        self.status.emit(
+                            f"Word не готов, повтор {attempt + 1}/{WORD_ATTEMPTS}: "
+                            f"{os.path.basename(src)}"
+                        )
                         try:
                             word.Quit()
                         except Exception:
                             pass
-                        word = _open_word()
-                        try:
-                            _convert_one(word, src)
-                            ok += 1
-                        except Exception as e2:
-                            errors.append(f"{name}: {e2}")
-        except Exception as e:
-            self.error.emit(str(e))
-            return
+                        time.sleep(WORD_RETRY_DELAY)
+                        word = self._open_word(win32com)
+                if self._stop_requested:
+                    break
+                self._evaluate(src, _file_seconds(started), error=error, word_pages=pages)
         finally:
-            # Гарантированно закрываем Word, иначе останется процесс WINWORD.exe.
             if word is not None:
                 try:
                     word.Quit()
@@ -3250,10 +4409,86 @@ class WordConvertThread(QThread):
                 pythoncom.CoUninitialize()
             except Exception:
                 pass
-        if self._stop_requested:
-            self.stopped.emit()
+
+    # ── LibreOffice (встроенный портативный 7.3.x или системный) ─────────
+    def _convert_one_lo(self, soffice, profile_url, src):
+        """Конвертация одного файла через `soffice --convert-to pdf`.
+
+        Существующий PDF отодвигается в сторону и возвращается, если
+        конвертация не удалась: старый файл не теряем.
+        """
+        out_dir = os.path.dirname(src) or "."
+        expected = self._out_path(src)
+        backup = None
+        if os.path.isfile(expected):
+            backup = expected + ".pdko_backup"
+            try:
+                os.replace(expected, backup)
+            except Exception:
+                backup = None
+        try:
+            res = subprocess.run(
+                [
+                    str(soffice),
+                    f"-env:UserInstallation={profile_url}",
+                    "--headless", "--norestore", "--nolockcheck",
+                    "--nodefault", "--nofirststartwizard",
+                    "--convert-to", "pdf:writer_pdf_Export",
+                    "--outdir", out_dir, src,
+                ],
+                capture_output=True, text=True, timeout=self.LO_TIMEOUT,
+                creationflags=_NO_WINDOW,
+            )
+            if res.returncode != 0:
+                detail = (res.stderr or res.stdout or "").strip().replace("\n", " ")
+                raise RuntimeError(detail[:300] or f"soffice завершился с кодом {res.returncode}")
+            if not os.path.isfile(expected) or os.path.getsize(expected) == 0:
+                raise RuntimeError("LibreOffice не создал PDF")
+        except Exception:
+            if backup and os.path.isfile(backup):
+                try:
+                    os.replace(backup, expected)
+                except Exception:
+                    pass
+            raise
         else:
-            self.finished_ok.emit(ok, len(errors), errors)
+            if backup and os.path.isfile(backup):
+                try:
+                    os.remove(backup)
+                except Exception:
+                    pass
+
+    def _run_libreoffice(self):
+        soffice = self.engine.get("path")
+        if not soffice or not os.path.isfile(soffice):
+            raise RuntimeError(
+                "Не найден LibreOffice. Переустановите программу или установите Microsoft Word."
+            )
+        profile_dir = tempfile.mkdtemp(prefix="pdko_lo_profile_")
+        profile_url = Path(profile_dir).as_uri()
+        try:
+            for i, src in enumerate(self.files):
+                if self._stop_requested:
+                    break
+                self.status.emit(
+                    f"Конвертация: {os.path.basename(src)} ({i + 1}/{len(self.files)})"
+                )
+                started = time.time()
+                error = None
+                for _attempt in (1, 2):
+                    try:
+                        self._convert_one_lo(soffice, profile_url, src)
+                        error = None
+                        break
+                    except Exception as e:
+                        error = str(e)
+                self._evaluate(src, _file_seconds(started), error=error)
+        finally:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+# Совместимость: старое имя класса (на него могли ссылаться извне)
+WordConvertThread = ConversionThread
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3818,74 +5053,282 @@ def _plural_ru(n, one, few, many):
     return many
 
 
-class WordConverterDialog(QDialog):
-    """Модальный самодостаточный попап конвертации Word → PDF.
+# ─────────────────────────────────────────────────────────────────────────────
+# Настройки интерфейса (что показывать, что уже не показывать)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Весь функционал (выбор файлов, прогресс, список ошибок, отмена) живёт
-    внутри диалога и не затрагивает статус/прогресс анализа главного окна.
+def _ui_settings_path():
+    return _app_data_dir() / "ui_settings.json"
+
+
+def _load_ui_settings():
+    try:
+        with open(_ui_settings_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_ui_settings(settings):
+    try:
+        with open(_ui_settings_path(), "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Стилизованные уведомления (без системных alert/confirm)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NoticeDialog(QDialog):
+    """Карточка-уведомление в стиле программы: текст, опциональная галочка."""
+
+    TONES = {
+        "info":    ("#007AFF", "#E8F2FF"),
+        "warning": ("#FF9500", "#FFF4E5"),
+        "danger":  ("#FF3B30", "#FFEBEB"),
+        "success": ("#34C759", "#F0FFF4"),
+    }
+
+    def __init__(self, parent, title, message, ok_text="Понятно",
+                 cancel_text=None, checkbox_text=None, tone="info"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.setStyleSheet(f"QDialog{{background:{THEME['bg']};color:{THEME['text']};}}")
+        accent, soft = self.TONES.get(tone, self.TONES["info"])
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 18)
+        root.setSpacing(14)
+
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
+            f"border-radius:{THEME['r_lg']};}}"
+        )
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(18, 16, 18, 16)
+        cl.setSpacing(10)
+
+        stripe = QFrame()
+        stripe.setFixedHeight(4)
+        stripe.setStyleSheet(f"background:{accent};border-radius:2px;")
+        cl.addWidget(stripe)
+
+        head = QLabel(title)
+        head.setFont(QFont("Segoe UI Variable Display", 14, QFont.Weight.Bold))
+        head.setWordWrap(True)
+        head.setStyleSheet(f"color:{accent};background:transparent;")
+        cl.addWidget(head)
+        body = QLabel(message)
+        body.setWordWrap(True)
+        body.setStyleSheet(f"color:{THEME['text']};background:transparent;font-size:13px;")
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        cl.addWidget(body)
+        root.addWidget(card)
+
+        self._checked = None
+        if checkbox_text:
+            self.checkbox = QCheckBox(checkbox_text)
+            self.checkbox.setStyleSheet(
+                f"QCheckBox{{color:{THEME['text_muted']};font-size:12px;background:transparent;}}"
+                f"QCheckBox::indicator{{width:16px;height:16px;border-radius:4px;"
+                f"border:1px solid {THEME['border_strong']};background:{THEME['surface']};}}"
+                f"QCheckBox::indicator:checked{{background:{THEME['primary']};"
+                f"border-color:{THEME['primary']};}}"
+            )
+            root.addWidget(self.checkbox)
+            self._checked = self.checkbox
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        btns.addStretch()
+        if cancel_text:
+            btn_cancel = QPushButton(cancel_text)
+            btn_cancel.setMinimumHeight(42)
+            btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_cancel.setStyleSheet(_qss_button("neutral"))
+            btn_cancel.clicked.connect(self.reject)
+            btns.addWidget(btn_cancel)
+        btn_ok = QPushButton(ok_text)
+        btn_ok.setMinimumHeight(42)
+        btn_ok.setMinimumWidth(150)
+        btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setStyleSheet(_qss_button("filled", accent=accent, accent_hover=accent))
+        btn_ok.clicked.connect(self.accept)
+        btns.addWidget(btn_ok)
+        root.addLayout(btns)
+
+    @property
+    def checked(self):
+        return bool(self._checked and self._checked.isChecked())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Отчёт о конвертации: текст для буфера и PDF для менеджера
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STATUS_TEXT = {
+    "ok": "✓  ок",
+    "warn": "⚠  проверить",
+    "error": "✗  ошибка",
+}
+
+
+def _report_engine_line(engine):
+    engine = engine or {}
+    title = engine.get("title") or "конвертер"
+    version = f" {engine['version']}" if engine.get("version") else ""
+    return f"{title}{version}".strip()
+
+
+def conversion_report_text(report):
+    """Отчёт о конвертации обычным текстом (для буфера обмена и логов)."""
+    engine = report.get("engine") or {}
+    totals = report.get("totals") or {}
+    counts = report.get("counts") or {}
+    when = report.get("when", "")
+    try:
+        when = datetime.fromisoformat(when).strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        pass
+
+    lines = [
+        "ОТЧЁТ О КОНВЕРТАЦИИ WORD → PDF",
+        f"Дата: {when}",
+        f"Конвертер: {_report_engine_line(engine)}",
+    ]
+    if engine.get("warning"):
+        lines.append(f"Внимание: {engine['warning']}")
+    if report.get("stopped"):
+        lines.append("Конвертация была остановлена пользователем")
+    lines.append("")
+    lines.append(
+        f"Файлов: {totals.get('files', 0)} · "
+        f"страниц в DOCX: {totals.get('src_pages', 0)} · "
+        f"страниц в PDF: {totals.get('pdf_pages', 0)}"
+    )
+    lines.append(
+        f"Без замечаний: {counts.get('ok', 0)} · "
+        f"требуют проверки: {counts.get('warn', 0)} · "
+        f"ошибок: {counts.get('error', 0)}"
+    )
+    if totals.get("mismatch"):
+        lines.append(f"Файлов с другим числом страниц: {totals['mismatch']}")
+    if totals.get("font_problems"):
+        lines.append(f"Файлов с проблемами шрифтов: {totals['font_problems']}")
+    if totals.get("stamp_problems"):
+        lines.append(f"Файлов с проблемами штампа/нумерации: {totals['stamp_problems']}")
+    lines.append("")
+    lines.append("ФАЙЛЫ")
+    for rec in report.get("files") or []:
+        src_pages = rec.get("src_pages")
+        pdf_pages = rec.get("pdf_pages")
+        pages = f"{src_pages if src_pages is not None else '?'} → {pdf_pages if pdf_pages is not None else '?'}"
+        engine = rec.get("engine_label") or _report_engine_line(report.get("engine"))
+        lines.append(
+            f"{_STATUS_TEXT.get(rec.get('status'), '•')}  {rec.get('name')}   "
+            f"[{pages} стр., {engine}]"
+        )
+
+    problems = [r for r in report.get("files") or [] if r.get("issues")]
+    if problems:
+        lines.append("")
+        lines.append("ЧТО НУЖНО ПРОВЕРИТЬ")
+        for rec in problems:
+            lines.append(f"{rec.get('name')}:")
+            for issue in rec.get("issues") or []:
+                lines.append(f"   – {issue}")
+    return "\n".join(lines)
+
+
+class ConversionDialog(QDialog):
+    """Попап конвертации Word → PDF: выбор файлов, прогресс и отчёт.
+
+    Перед запуском показывает уведомление о том, что результат нужно
+    проверить, а после — таблицу «файл · страниц DOCX · страниц PDF ·
+    шрифты · статус» и кнопки отчёта (PDF, копирование, папка).
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Конвертация Word → PDF")
         self.setModal(True)
-        self.setFixedWidth(560)
+        self.setMinimumWidth(760)
         self.setStyleSheet(f"QDialog{{background:{THEME['bg']};color:{THEME['text']};}}")
         self._thread = None
         self._files = []
         self._running = False
+        self._report = None
+        self._row_by_src = {}
+        self._rec_by_row = {}
+        self._engine = select_conversion_engine()
         self._build_ui()
+        self._refresh_engine()
 
+    # ── UI ────────────────────────────────────────────────────────────────
     def _build_ui(self):
         card_qss = (
             f"QFrame#Card{{background:{THEME['surface']};border:1px solid {THEME['divider']};"
             f"border-radius:{THEME['r_lg']};}}"
         )
-        root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 18); root.setSpacing(12)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
 
+        head = QHBoxLayout()
+        head.setSpacing(10)
         title = QLabel("📄  Конвертация Word → PDF")
         title.setFont(QFont("Segoe UI Variable Display", 16, QFont.Weight.Bold))
         title.setStyleSheet(f"color:{THEME['text']};background:transparent;")
-        root.addWidget(title)
+        head.addWidget(title)
+        head.addStretch()
+        self.lbl_engine = QLabel("Конвертер: —")
+        self.lbl_engine.setStyleSheet(
+            f"color:{THEME['primary_text']};background:{THEME['primary_soft']};"
+            f"border-radius:{THEME['r_pill']};padding:6px 12px;font-size:11px;font-weight:600;"
+        )
+        head.addWidget(self.lbl_engine)
+        root.addLayout(head)
 
-        note = QLabel("PDF сохраняется рядом с исходным файлом.")
+        note = QLabel("PDF сохраняется рядом с исходным файлом. "
+                      "После конвертации программа сверит число страниц и шрифты и покажет отчёт.")
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{THEME['text_muted']};background:transparent;font-size:12px;")
         root.addWidget(note)
 
-        # Карточка выбора файлов
+        # выбор файлов
         pick_card = QFrame(); pick_card.setObjectName("Card"); pick_card.setStyleSheet(card_qss)
         pcl = QVBoxLayout(pick_card); pcl.setContentsMargins(16, 14, 16, 14); pcl.setSpacing(10)
-
         self.btn_pick = QPushButton("📂  Выбрать файлы…")
         self.btn_pick.setMinimumHeight(42)
         self.btn_pick.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pick.setStyleSheet(_qss_button("tonal"))
         self.btn_pick.clicked.connect(self._pick_files)
         pcl.addWidget(self.btn_pick)
-
         self.lbl_count = QLabel("Файлы не выбраны")
         self.lbl_count.setStyleSheet(
-            f"color:{THEME['text_muted']};background:transparent;font-size:12px;"
-        )
+            f"color:{THEME['text_muted']};background:transparent;font-size:12px;")
         self.lbl_count.setWordWrap(True)
         pcl.addWidget(self.lbl_count)
-
         self.list_files = QListWidget()
-        self.list_files.setFixedHeight(120)
+        self.list_files.setFixedHeight(96)
         self.list_files.setVisible(False)
         self.list_files.setStyleSheet(
             f"QListWidget{{background-color:{THEME['surface_alt']};color:{THEME['text']};"
             f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};outline:none;padding:4px;}}"
-            f"QListWidget::item{{padding:4px 6px;}}"
+            f"QListWidget::item{{padding:3px 6px;}}"
         )
         pcl.addWidget(self.list_files)
         root.addWidget(pick_card)
 
-        # Карточка прогресса и статуса
+        # прогресс
         prog_card = QFrame(); prog_card.setObjectName("Card"); prog_card.setStyleSheet(card_qss)
         pgl = QVBoxLayout(prog_card); pgl.setContentsMargins(16, 14, 16, 14); pgl.setSpacing(10)
-
         self.progress_bar = QProgressBar(); self.progress_bar.setValue(0)
         self.progress_bar.setStyleSheet(
             f"QProgressBar{{border:none;border-radius:5px;text-align:center;height:10px;"
@@ -3895,30 +5338,93 @@ class WordConverterDialog(QDialog):
             f"stop:0 #0A84FF, stop:1 #00C2FF);}}"
         )
         pgl.addWidget(self.progress_bar)
-
         self.lbl_status = QLabel("Готово к конвертации")
         self.lbl_status.setStyleSheet(
-            f"color:{THEME['text']};background:transparent;font-size:14px;font-weight:600;"
-        )
+            f"color:{THEME['text']};background:transparent;font-size:14px;font-weight:600;")
         self.lbl_status.setWordWrap(True)
         self.lbl_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.lbl_status.setMinimumWidth(0)
         pgl.addWidget(self.lbl_status)
         root.addWidget(prog_card)
 
-        # Область ошибок — скрыта до завершения
+        # итоговая плашка
+        self.lbl_summary = QLabel("")
+        self.lbl_summary.setWordWrap(True)
+        self.lbl_summary.setVisible(False)
+        root.addWidget(self.lbl_summary)
+
+        # памятка «как читать отчёт» — отчёт показывается только здесь,
+        # PDF-файла с ним нет
+        self.lbl_hint = QLabel(
+            "✓ ок — можно отдавать.   "
+            "⚠ проверить — посмотрите PDF (страницы, шрифт, рамка): двойной клик по строке открывает файл.   "
+            "✗ ошибка — файл не сконвертирован."
+        )
+        self.lbl_hint.setWordWrap(True)
+        self.lbl_hint.setVisible(False)
+        self.lbl_hint.setStyleSheet(
+            f"color:{THEME['text_muted']};background:transparent;font-size:11px;"
+        )
+        root.addWidget(self.lbl_hint)
+
+        # таблица результатов
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Файл", "Стр. DOCX", "Стр. PDF", "Шрифты", "Статус"])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setVisible(False)
+        self.table.setFixedHeight(190)
+        self.table.setStyleSheet(
+            f"QTableWidget{{background:{THEME['surface']};color:{THEME['text']};"
+            f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};"
+            f"gridline-color:{THEME['divider']};font-size:12px;}}"
+            f"QHeaderView::section{{background:{THEME['surface_alt']};color:{THEME['text_muted']};"
+            f"border:none;border-bottom:1px solid {THEME['divider']};padding:6px;font-size:11px;}}"
+        )
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.cellDoubleClicked.connect(self._open_row_pdf)
+        root.addWidget(self.table)
+
+        # замечания
         self.errors = QTextEdit()
         self.errors.setReadOnly(True)
         self.errors.setFixedHeight(110)
         self.errors.setVisible(False)
         self.errors.setStyleSheet(
-            f"QTextEdit{{background-color:{THEME['danger_soft']};color:{THEME['danger_text']};"
+            f"QTextEdit{{background-color:{THEME['warning_soft']};color:{THEME['warning_text']};"
             f"border:1px solid {THEME['divider']};border-radius:{THEME['r_md']};"
             f"padding:8px;font-size:12px;}}"
         )
         root.addWidget(self.errors)
 
-        # Кнопки
+        # кнопки отчёта: отчёт живёт только в этом окне — никаких PDF-файлов,
+        # которые можно случайно отправить на печать
+        self.report_btns = QWidget()
+        rl = QHBoxLayout(self.report_btns)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+        self.btn_report_copy = QPushButton("📋  Скопировать отчёт")
+        self.btn_report_copy.setMinimumHeight(40)
+        self.btn_report_copy.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_report_copy.setStyleSheet(_qss_button("tonal"))
+        self.btn_report_copy.clicked.connect(self._copy_report)
+        rl.addWidget(self.btn_report_copy, stretch=1)
+        self.btn_report_folder = QPushButton("📁  Открыть папку с PDF")
+        self.btn_report_folder.setMinimumHeight(40)
+        self.btn_report_folder.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_report_folder.setStyleSheet(_qss_button("tonal"))
+        self.btn_report_folder.clicked.connect(self._open_folder)
+        rl.addWidget(self.btn_report_folder, stretch=1)
+        self.report_btns.setVisible(False)
+        root.addWidget(self.report_btns)
+
+        # основные кнопки
         btns = QHBoxLayout(); btns.setSpacing(10)
         self.btn_convert = QPushButton("▶️  Конвертировать")
         self.btn_convert.setMinimumHeight(44)
@@ -3928,7 +5434,6 @@ class WordConverterDialog(QDialog):
         self.btn_convert.setEnabled(False)
         self.btn_convert.clicked.connect(self._start)
         btns.addWidget(self.btn_convert, stretch=1)
-
         self.btn_stop = QPushButton("⏹  Стоп")
         self.btn_stop.setMinimumHeight(44)
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3937,7 +5442,6 @@ class WordConverterDialog(QDialog):
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop)
         btns.addWidget(self.btn_stop, stretch=0)
-
         self.btn_close = QPushButton("Закрыть")
         self.btn_close.setMinimumHeight(44)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3945,6 +5449,32 @@ class WordConverterDialog(QDialog):
         self.btn_close.clicked.connect(self.reject)
         btns.addWidget(self.btn_close, stretch=0)
         root.addLayout(btns)
+
+    def _refresh_engine(self):
+        self._engine = select_conversion_engine()
+        if not self._engine:
+            self.lbl_engine.setText("Конвертер не найден")
+            self.lbl_engine.setStyleSheet(
+                f"color:{THEME['danger_text']};background:{THEME['danger_soft']};"
+                f"border-radius:{THEME['r_pill']};padding:6px 12px;font-size:11px;font-weight:600;")
+            self.btn_convert.setEnabled(False)
+            self.btn_convert.setToolTip(
+                "Нужен Microsoft Word или встроенный LibreOffice — переустановите программу")
+            return
+        self.lbl_engine.setText(f"Конвертер: {_engine_label(self._engine)}")
+        if self._engine.get("warning"):
+            self.lbl_engine.setStyleSheet(
+                f"color:{THEME['warning_text']};background:{THEME['warning_soft']};"
+                f"border-radius:{THEME['r_pill']};padding:6px 12px;font-size:11px;font-weight:600;")
+            self.lbl_engine.setToolTip(self._engine["warning"])
+        else:
+            self.lbl_engine.setStyleSheet(
+                f"color:{THEME['success_text']};background:{THEME['success_soft']};"
+                f"border-radius:{THEME['r_pill']};padding:6px 12px;font-size:11px;font-weight:600;")
+            self.lbl_engine.setToolTip("Эталонная вёрстка: конвертация через Microsoft Word")
+        self.btn_convert.setToolTip(
+            f"Пакетная конвертация .doc/.docx в PDF. Движок: {_engine_label(self._engine)}")
+        self._update_buttons()
 
     # ── Выбор файлов ──────────────────────────────────────────────────────
     def _pick_files(self):
@@ -3968,29 +5498,61 @@ class WordConverterDialog(QDialog):
         self._update_buttons()
 
     def _update_buttons(self):
-        self.btn_convert.setEnabled(bool(self._files) and not self._running)
+        self.btn_convert.setEnabled(bool(self._files) and not self._running and self._engine is not None)
         self.btn_stop.setEnabled(self._running)
         self.btn_pick.setEnabled(not self._running)
 
     # ── Запуск/остановка ──────────────────────────────────────────────────
     def _start(self):
-        if self._running:
+        if self._running or not self._files:
             return
-        if not self._files:
+        self._engine = select_conversion_engine()
+        if not self._engine:
+            NoticeDialog(
+                self, "Конвертер не найден",
+                "Для конвертации нужен Microsoft Word или встроенный LibreOffice 7.3.\n\n"
+                "Переустановите программу — установщик кладёт LibreOffice рядом с ней, "
+                "либо установите Microsoft Word на этот компьютер.",
+                tone="danger",
+            ).exec()
+            self._refresh_engine()
             return
-        if not _word_available():
-            self.lbl_status.setText("❌ Microsoft Word не найден")
-            self._show_errors(["Для конвертации требуется установленный Microsoft Word."])
-            return
+
+        settings = _load_ui_settings()
+        if not settings.get("conversion_notice_disabled"):
+            dlg = NoticeDialog(
+                self, "Перед конвертацией",
+                "После конвертации обязательно проверьте отчёт: программа сравнит число "
+                "страниц в DOCX и PDF и проверит шрифты.\n\n"
+                "Если число страниц изменилось или шрифт не найден, файл в отчёте помечается "
+                "«⚠️ проверить» — такой PDF нужно открыть и посмотреть глазами, прежде чем "
+                "передавать заказчику.\n\n"
+                "Особенно важно проверить рамку/штамп ГОСТ: при конвертации не через Word "
+                "вертикальный текст в нём может рассыпаться.",
+                ok_text="Продолжить",
+                cancel_text="Отмена",
+                checkbox_text="Больше не показывать это окно",
+                tone="warning",
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            if dlg.checked:
+                settings["conversion_notice_disabled"] = True
+                _save_ui_settings(settings)
+
         self.progress_bar.setValue(0)
-        self._hide_errors()
+        self._hide_results()
         self.lbl_status.setText("⏳ Конвертация…")
         self._running = True
         self._update_buttons()
-        self._thread = WordConvertThread(self._files)
+
+        self._thread = ConversionThread(
+            self._files, self._engine, installed_fonts=_installed_font_families()
+        )
         self._thread.progress.connect(self._on_progress)
         self._thread.status.connect(self._on_status)
-        self._thread.finished_ok.connect(self._on_finished)
+        self._thread.file_done.connect(self._on_file_done)
+        self._thread.finished_report.connect(self._on_finished)
         self._thread.error.connect(self._on_error)
         self._thread.stopped.connect(self._on_stopped)
         self._thread.start()
@@ -4001,55 +5563,228 @@ class WordConverterDialog(QDialog):
             self.btn_stop.setEnabled(False)
             self._thread.request_stop()
 
-    # ── Слоты потока (обновляют только виджеты диалога) ───────────────────
+    # ── Слоты потока ──────────────────────────────────────────────────────
     def _on_progress(self, v):
         self.progress_bar.setValue(v)
 
     def _on_status(self, s):
         self.lbl_status.setText(f"⏳ {s}")
 
-    def _on_finished(self, ok, errors_count, errors):
+    def _on_file_done(self, rec):
+        self.table.setVisible(True)
+        row = self._row_by_src.get(rec.get("src"))
+        if row is None:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self._row_by_src[rec.get("src")] = row
+        self._rec_by_row[row] = rec
+        self._fill_row(row, rec)
+
+    def _fill_row(self, row, rec):
+        name_item = QTableWidgetItem(rec.get("name", ""))
+        tip = [rec.get("src", "")]
+        if rec.get("engine_label"):
+            tip.append(f"Конвертер: {rec['engine_label']}")
+        tip.append("Двойной клик — открыть PDF")
+        name_item.setToolTip("\n".join(t for t in tip if t))
+        self.table.setItem(row, 0, name_item)
+
+        src_pages = rec.get("src_pages")
+        pdf_pages = rec.get("pdf_pages")
+        src_item = QTableWidgetItem(str(src_pages) if src_pages is not None else "—")
+        src_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(row, 1, src_item)
+        pdf_item = QTableWidgetItem(str(pdf_pages) if pdf_pages is not None else "—")
+        pdf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(row, 2, pdf_item)
+
+        fonts = rec.get("fonts") or {}
+        # В счётчик идут только реальные проблемы: шрифта нет в системе или он
+        # не внедрён в PDF. Подстановку метрического аналога (Times→Liberation)
+        # показываем в подсказке как справку — иначе предупреждение висит всегда.
+        font_problems = (len(fonts.get("missing") or [])
+                         + len(fonts.get("not_embedded") or []))
+        font_item = QTableWidgetItem("✓" if not font_problems else f"⚠ {font_problems}")
+        font_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        font_lines = []
+        if fonts.get("missing"):
+            font_lines.append("Нет в системе: " + ", ".join(fonts["missing"]))
+        if fonts.get("replaced"):
+            font_lines.append("Подставлены в PDF: " + ", ".join(fonts["replaced"]))
+        if fonts.get("not_embedded"):
+            font_lines.append("Не внедрены в PDF: " + ", ".join(fonts["not_embedded"]))
+        if fonts.get("unexpected"):
+            font_lines.append("Есть в PDF: " + ", ".join(fonts["unexpected"][:6]))
+        if font_lines:
+            font_item.setToolTip("\n".join(font_lines))
+        if font_problems:
+            font_item.setForeground(QColor(THEME["warning"]))
+        self.table.setItem(row, 3, font_item)
+
+        status = rec.get("status")
+        status_item = QTableWidgetItem(_STATUS_TEXT.get(status, "•"))
+        color = {"ok": THEME["success_text"], "warn": THEME["warning_text"],
+                 "error": THEME["danger_text"]}.get(status)
+        if color:
+            status_item.setForeground(QColor(color))
+            font = status_item.font()
+            font.setBold(True)
+            status_item.setFont(font)
+        if rec.get("issues"):
+            status_item.setToolTip("\n".join(rec["issues"]))
+        self.table.setItem(row, 4, status_item)
+
+        if rec.get("pages_mismatch"):
+            pdf_item.setForeground(QColor(THEME["danger"]))
+
+    def _on_finished(self, report):
         self._running = False
+        self._report = report
         self.progress_bar.setValue(100)
-        self.lbl_status.setText(f"✅ Конвертировано: {ok}, ошибок: {errors_count}")
-        if errors:
-            self._show_errors(errors)
+        totals = report.get("totals") or {}
+        counts = report.get("counts") or {}
+        if report.get("stopped"):
+            self.lbl_status.setText("⏹ Конвертация остановлена — отчёт по готовым файлам ниже")
+        else:
+            self.lbl_status.setText("✅ Конвертация завершена")
+
+        ok, warn, err = counts.get("ok", 0), counts.get("warn", 0), counts.get("error", 0)
+        parts = [f"Файлов: {totals.get('files', 0)}",
+                 f"страниц {totals.get('src_pages', 0)} → {totals.get('pdf_pages', 0)}",
+                 f"✅ {ok}"]
+        if warn:
+            parts.append(f"⚠️ {warn}")
+        if err:
+            parts.append(f"❌ {err}")
+        self.lbl_summary.setText("   ·   ".join(parts))
+        if err:
+            tone = ("danger_text", "danger_soft")
+        elif warn or totals.get("mismatch") or totals.get("font_problems"):
+            tone = ("warning_text", "warning_soft")
+        else:
+            tone = ("success_text", "success_soft")
+        self.lbl_summary.setStyleSheet(
+            f"color:{THEME[tone[0]]};background:{THEME[tone[1]]};border-radius:{THEME['r_md']};"
+            f"padding:10px 14px;font-size:13px;font-weight:600;")
+        self.lbl_summary.setVisible(True)
+
+        issues = []
+        for rec in report.get("files") or []:
+            for issue in rec.get("issues") or []:
+                issues.append(f"{rec.get('name')}: {issue}")
+        if issues:
+            listing = list(issues[:60])
+            if len(issues) > 60:
+                listing.append(f"… и ещё {len(issues) - 60}")
+            self.errors.setPlainText("\n".join(listing))
+            self.errors.setVisible(True)
+
+        self.report_btns.setVisible(True)
+        self.lbl_hint.setVisible(True)
         self._update_buttons()
 
     def _on_error(self, msg):
         self._running = False
         self.lbl_status.setText(f"❌ Ошибка: {msg}")
-        self._show_errors([msg])
+        self.lbl_summary.setText(f"❌ Ошибка: {msg}")
+        self.lbl_summary.setStyleSheet(
+            f"color:{THEME['danger_text']};background:{THEME['danger_soft']};"
+            f"border-radius:{THEME['r_md']};padding:10px 14px;font-size:13px;font-weight:600;")
+        self.lbl_summary.setVisible(True)
         self._update_buttons()
 
     def _on_stopped(self):
         self._running = False
-        self.progress_bar.setValue(0)
-        self.lbl_status.setText("⏹ Конвертация отменена")
+        self.lbl_status.setText("⏹ Конвертация остановлена — отчёт ниже по готовым файлам")
         self._update_buttons()
 
-    def _show_errors(self, errors):
-        listing = list(errors[:50])
-        if len(errors) > 50:
-            listing.append(f"… и ещё {len(errors) - 50}")
-        self.errors.setPlainText("\n".join(listing))
-        self.errors.setVisible(True)
+    # ── Отчёт ─────────────────────────────────────────────────────────────
+    def _report_folder(self):
+        folders = [os.path.dirname(f) for f in self._files if os.path.dirname(f)]
+        if not folders:
+            return os.getcwd()
+        try:
+            return os.path.commonpath(folders)
+        except ValueError:
+            return folders[0]
 
-    def _hide_errors(self):
+    def _row_pdf_path(self, row):
+        """Путь к PDF из строки отчёта (пустая строка, если файла нет)."""
+        rec = self._rec_by_row.get(row) or {}
+        path = rec.get("out") or ""
+        return path if path and os.path.isfile(path) else ""
+
+    def _open_row_pdf(self, row, column=0):
+        """Двойной клик по строке отчёта открывает соответствующий PDF."""
+        path = self._row_pdf_path(row)
+        if not path:
+            NoticeDialog(
+                self, "PDF не найден",
+                "Файл не создан или уже перемещён — посмотрите статус строки "
+                "в отчёте («✓ ок» или «⚠ проверить» означают, что PDF есть).",
+                tone="warning",
+            ).exec()
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            NoticeDialog(self, "Не удалось открыть PDF", str(e), tone="danger").exec()
+
+    def _copy_report(self):
+        if not self._report:
+            return
+        text = conversion_report_text(self._report)
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+        except Exception:
+            try:
+                p = subprocess.Popen(['clip'], stdin=subprocess.PIPE, shell=True)
+                p.communicate(text.encode('utf-8'))
+            except Exception:
+                return
+        self.btn_report_copy.setText("✅ Скопировано")
+        QTimer.singleShot(
+            2200, lambda: self.btn_report_copy.setText("📋  Копировать отчёт"))
+
+    def _open_folder(self):
+        folder = self._report_folder()
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            pass
+
+    def _hide_results(self):
+        self.table.setVisible(False)
+        self.table.setRowCount(0)
+        self._row_by_src.clear()
+        self._rec_by_row.clear()
         self.errors.clear()
         self.errors.setVisible(False)
+        self.lbl_summary.setVisible(False)
+        self.lbl_hint.setVisible(False)
+        self.report_btns.setVisible(False)
+        self._report = None
 
-    # ── Закрытие (Esc/крестик/«Закрыть» — через подтверждение) ────────────
+    # ── Закрытие ──────────────────────────────────────────────────────────
     def _confirm_close(self):
-        """True — можно закрывать; при работе потока корректно его останавливает."""
         if self._running and self._thread is not None and self._thread.isRunning():
-            ans = QMessageBox.question(
+            dlg = NoticeDialog(
                 self, "Отмена конвертации",
-                "Отменить конвертацию и закрыть?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                "Остановить конвертацию и закрыть окно?",
+                ok_text="Остановить", cancel_text="Продолжить", tone="warning",
             )
-            if ans != QMessageBox.StandardButton.Yes:
+            if dlg.exec() != QDialog.DialogCode.Accepted:
                 return False
             self._stop()
             self._thread.wait(8000)
@@ -4484,7 +6219,7 @@ class PrintingCalculator(QMainWindow):
         self.label_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.label_status.setMinimumWidth(0)
         scl.addWidget(self.label_status)
-        scl_note=QLabel("Программа принимает и рассчитывает только файлы PDF. Word-документы предварительно переведите в PDF.")
+        scl_note=QLabel("Программа принимает и рассчитывает только файлы PDF. Word-документы переведите в PDF кнопкой ниже — конвертация идёт через Microsoft Word, а если его нет, через встроенный LibreOffice 7.3.")
         scl_note.setStyleSheet(f"color:{self.theme['text_muted']};font-size:11px;background:transparent;")
         scl_note.setWordWrap(True)
         scl_note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -4515,11 +6250,7 @@ class PrintingCalculator(QMainWindow):
         self.btn_word2pdf.setStyleSheet(_qss_button("tonal"))
         self.btn_word2pdf.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_word2pdf.clicked.connect(self.open_word_converter)
-        if not _word_available():
-            self.btn_word2pdf.setEnabled(False)
-            self.btn_word2pdf.setToolTip("Требуется установленный Microsoft Word")
-        else:
-            self.btn_word2pdf.setToolTip("Пакетная конвертация .doc/.docx в PDF рядом с исходными файлами")
+        self._apply_converter_hint()
         scl.addWidget(self.btn_word2pdf)
         right.addWidget(sc_card)
 
@@ -4940,25 +6671,46 @@ class PrintingCalculator(QMainWindow):
         self.btn_analyze.setStyleSheet(_qss_button("filled"))
         self._set_word_button_enabled(True)
 
-    def _set_word_button_enabled(self, enabled):
-        """Кнопка конвертера активна только если Word доступен и включён запрос."""
+    def _apply_converter_hint(self):
+        """Подсказка у кнопки конвертера: какой движок будет использован."""
         btn = getattr(self, "btn_word2pdf", None)
         if btn is None:
             return
-        btn.setEnabled(bool(enabled) and _word_available())
+        engine = select_conversion_engine()
+        if not engine:
+            btn.setToolTip(
+                "Конвертер не найден: нужен Microsoft Word или встроенный LibreOffice 7.3"
+            )
+            return
+        tooltip = f"Пакетная конвертация .doc/.docx в PDF. Движок: {_engine_label(engine)}"
+        if engine.get("warning"):
+            tooltip += f"\n⚠️ {engine['warning']}"
+        btn.setToolTip(tooltip)
+
+    def _set_word_button_enabled(self, enabled):
+        """Кнопка конвертера активна, только если есть рабочий движок."""
+        btn = getattr(self, "btn_word2pdf", None)
+        if btn is None:
+            return
+        btn.setEnabled(bool(enabled) and select_conversion_engine() is not None)
 
     def open_word_converter(self):
         """Открывает модальный попап конвертации Word → PDF."""
         if self.thread is not None and self.thread.isRunning():
             return
-        if not _word_available():
-            QMessageBox.warning(
-                self, "Microsoft Word не найден",
-                "Для конвертации Word → PDF требуется установленный Microsoft Word.\n"
-                "Установите Word и перезапустите программу."
-            )
+        if select_conversion_engine() is None:
+            NoticeDialog(
+                self, "Конвертер не найден",
+                "Для конвертации Word → PDF нужен Microsoft Word или встроенный "
+                "LibreOffice 7.3.\n\n"
+                "Переустановите PDKopirka — установщик кладёт LibreOffice рядом с "
+                "программой, либо установите Microsoft Word и перезапустите программу.",
+                tone="danger",
+            ).exec()
             return
-        WordConverterDialog(self).exec()
+        ConversionDialog(self).exec()
+        self._apply_converter_hint()
+        self._set_word_button_enabled(True)
 
     def show_unknown_format_dialog(self, w, h, color, pages, pdf_path):
         if self.thread and self.thread._stop_requested: self.thread.set_user_response("skip",None); return
@@ -5927,13 +7679,18 @@ def _check_update_background():
 
 def _on_update_found(has_update, latest_ver, dl_url):
     global _update_dialog_ref
-    if has_update and latest_ver:
-        _mark_update_attempt(latest_ver)
-        # Держим ссылку, иначе диалог удаляется сборщиком мусора и обновление не скачивается
-        _update_dialog_ref = UpdateDialog(latest_ver, dl_url)
-        _update_dialog_ref.show()
-        _update_dialog_ref.raise_()
-        _update_dialog_ref.activateWindow()
+    if not (has_update and latest_ver):
+        return
+    # Защита от «бесконечного обновления»: если установку этой версии уже
+    # запускали, а программа всё ещё старая — не показываем окно при каждом
+    # запуске (повторим не раньше, чем через сутки).
+    if _update_is_recently_attempted(latest_ver):
+        return
+    # Держим ссылку, иначе диалог удаляется сборщиком мусора и обновление не скачивается
+    _update_dialog_ref = UpdateDialog(latest_ver, dl_url)
+    _update_dialog_ref.show()
+    _update_dialog_ref.raise_()
+    _update_dialog_ref.activateWindow()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Встроенный портативный LibreOffice (готовится tools/fetch_libreoffice.ps1, ~1 ГБ)
+vendor/
+
 # IDE
 .idea/
 .vscode/
@@ -18,3 +21,5 @@ generate_token*.py
 Screenshot_*.jpg
 Отчет_*.pdf
 Пример.pdf
+# .kilo — локальные планы агента, в репозиторий не нужны
+.kilo/
